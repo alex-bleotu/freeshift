@@ -24,12 +24,17 @@ const ACTIONS = [
 
 const LOG_LIMIT = 300;
 
+const OUTPUT_FAILURE = /^(OpenBikeControl|Keyboard) output stopped/;
+
+const KEY_NAME = /^([a-z0-9]|up|down|left|right|pageup|pagedown|home|end|space|enter|tab|minus|plus|comma|period|f([1-9]|1[0-2]))$/i;
+
 const state = {
   saved: null,
   draft: null,
   devices: new Map(),
   clients: [],
   output: "",
+  outputError: "",
   counts: { ShiftUp: 0, ShiftDown: 0 },
 };
 
@@ -71,12 +76,16 @@ function renderStatus() {
     pill.classList.add("ok");
     return;
   }
+  if (state.outputError) {
+    pill.textContent = "Output stopped, see Activity";
+    pill.classList.add("warn");
+    return;
+  }
   if (state.output) {
     pill.textContent = "Waiting for MyWhoosh to connect";
     return;
   }
-  pill.textContent = "Output not running";
-  pill.classList.add("warn");
+  pill.textContent = "Starting";
 }
 
 function renderDevices() {
@@ -193,14 +202,22 @@ function bindField(id, key, parse) {
   element(id).addEventListener("input", (event) => {
     const value = parse(event.target.value);
     if (value === null) {
+      event.target.setCustomValidity("Invalid value");
       return;
     }
+    event.target.setCustomValidity("");
     state.draft[key] = value;
     if (key === "controllerName") {
       renderOutputFields();
     }
     updateSaveBar();
   });
+}
+
+function parseKey(text) {
+  const value = text.trim();
+
+  return KEY_NAME.test(value) ? value : null;
 }
 
 function parseInteger(minimum, maximum) {
@@ -225,6 +242,10 @@ function handleEvent(event) {
   switch (event.type) {
     case "log":
       appendLog(event.message);
+      if (OUTPUT_FAILURE.test(event.message)) {
+        state.outputError = event.message;
+        renderStatus();
+      }
       break;
     case "deviceConnected":
       state.devices.set(event.id, { id: event.id, name: event.name, kind: event.kind, battery: null });
@@ -295,6 +316,7 @@ async function refresh() {
     state.devices = new Map(snapshot.devices.map((device) => [device.id, device]));
     state.clients = snapshot.clients;
     state.output = snapshot.output;
+    state.outputError = "";
     element("autostart").checked = snapshot.autostart;
     element("config-path").textContent = snapshot.configPath;
     const list = element("log");
@@ -310,17 +332,26 @@ async function refresh() {
   }
 }
 
+async function refreshStatus() {
+  try {
+    const snapshot = await invoke("get_snapshot");
+    state.devices = new Map(snapshot.devices.map((device) => [device.id, device]));
+    state.clients = snapshot.clients;
+    state.output = snapshot.output;
+    element("autostart").checked = snapshot.autostart;
+    renderDevices();
+    renderStatus();
+  } catch (error) {
+    appendLog(`Could not read status: ${error}`);
+  }
+}
+
 async function save() {
   const button = element("save");
   button.disabled = true;
   try {
     await invoke("save_config", { config: state.draft });
     state.saved = clone(state.draft);
-    state.devices.clear();
-    state.clients = [];
-    state.output = "";
-    renderDevices();
-    renderStatus();
     updateSaveBar();
   } catch (error) {
     appendLog(`Save failed: ${error}`);
@@ -389,8 +420,8 @@ function wireUp() {
   }
   bindField("controller-name", "controllerName", (text) => (text.trim() ? text.trim() : null));
   bindField("obc-port", "obcPort", parseInteger(1024, 65535));
-  bindField("shift-up-key", "shiftUpKey", (text) => (text.trim() ? text.trim() : null));
-  bindField("shift-down-key", "shiftDownKey", (text) => (text.trim() ? text.trim() : null));
+  bindField("shift-up-key", "shiftUpKey", parseKey);
+  bindField("shift-down-key", "shiftDownKey", parseKey);
   bindField("focus-window", "focusWindowPrefix", (text) => text);
   bindField("key-hold", "keyHoldMs", parseInteger(10, 500));
   bindField("double-tap", "doubleTapMs", parseInteger(150, 800));
@@ -403,19 +434,31 @@ function wireUp() {
   element("save").addEventListener("click", save);
   element("revert").addEventListener("click", () => {
     state.draft = clone(state.saved);
+    for (const input of document.querySelectorAll("input")) {
+      input.setCustomValidity("");
+    }
     renderForm();
   });
   element("swap").addEventListener("click", swap);
+}
+
+async function showVersion() {
+  try {
+    element("version").textContent = await window.__TAURI__.app.getVersion();
+  } catch (error) {
+    appendLog(`Could not read the app version: ${error}`);
+  }
 }
 
 async function start() {
   wireUp();
   await listen("engine-event", (message) => handleEvent(message.payload));
   await listen("engine-restarted", () => {
-    state.output = "";
-    renderStatus();
+    state.outputError = "";
+    refreshStatus();
   });
   await refresh();
+  showVersion();
 }
 
 start();

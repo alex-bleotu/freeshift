@@ -94,14 +94,14 @@ h2 {
 }
 
 .grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  align-items: start;
-  gap: 16px;
+  columns: 300px 3;
+  column-gap: 16px;
   padding: 16px;
 }
 
 .card {
+  break-inside: avoid;
+  margin-block-end: 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -122,7 +122,7 @@ h2 {
 }
 
 .log-card {
-  grid-column: 1 / -1;
+  column-span: all;
 }
 
 .muted {
@@ -241,6 +241,10 @@ code {
   padding-block: 4px;
 }
 
+.mapping select {
+  min-inline-size: 136px;
+}
+
 .button-name {
   display: flex;
   align-items: center;
@@ -248,6 +252,7 @@ code {
 }
 
 .dot {
+  flex-shrink: 0;
   inline-size: 8px;
   block-size: 8px;
   border-radius: 50%;
@@ -283,6 +288,10 @@ select {
   border-radius: 8px;
   padding: 8px;
   inline-size: 100%;
+}
+
+input:not(:placeholder-shown):invalid {
+  border-color: var(--danger);
 }
 
 input:focus-visible,
