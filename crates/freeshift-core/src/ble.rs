@@ -35,6 +35,12 @@ enum Target {
     Custom(CustomTrigger),
 }
 
+fn is_connect_error(text: &str) -> bool {
+    ["connection failed", "connection timed out", "service discovery"]
+        .iter()
+        .any(|marker| text.contains(marker))
+}
+
 pub async fn first_adapter() -> Result<Adapter> {
     let manager = Manager::new().await.context("Bluetooth is not available")?;
     let adapters = manager.adapters().await.context("listing Bluetooth adapters")?;
@@ -76,8 +82,9 @@ struct Scanner {
     raw: mpsc::UnboundedSender<RawInput>,
     events: broadcast::Sender<EngineEvent>,
     stop: watch::Receiver<bool>,
-    done: mpsc::UnboundedSender<PeripheralId>,
+    done: mpsc::UnboundedSender<(PeripheralId, bool)>,
     active: HashSet<PeripheralId>,
+    failing: HashSet<PeripheralId>,
     attempts: HashMap<PeripheralId, Instant>,
 }
 
@@ -106,17 +113,27 @@ impl Scanner {
         let stop = self.stop.clone();
         let done = self.done.clone();
         let window = Duration::from_millis(self.config.double_tap_ms);
+        let is_repeat_failure = self.failing.contains(&id);
         tokio::spawn(async move {
             let label = if name.is_empty() { peripheral.address().to_string() } else { name.clone() };
             let result = match target {
                 Target::Zwift(kind) => zwift_session(&peripheral, kind, &label, &raw, &events, stop).await,
                 Target::Custom(trigger) => trigger_session(&peripheral, &trigger, &label, window, &raw, &events, stop).await,
             };
+            let mut is_connect_failure = false;
             if let Err(error) = result {
-                let _ = events.send(EngineEvent::Log { message: format!("{label}: {error:#}") });
+                let text = format!("{error:#}");
+                is_connect_failure = is_connect_error(&text);
+                if !is_connect_failure {
+                    let _ = events.send(EngineEvent::Log { message: format!("{label}: {text}") });
+                } else if !is_repeat_failure {
+                    let _ = events.send(EngineEvent::Log {
+                        message: format!("{label}: can't connect right now ({text}). Press a button on it to wake it; FreeShift keeps trying quietly."),
+                    });
+                }
             }
             let _ = peripheral.disconnect().await;
-            let _ = done.send(id);
+            let _ = done.send((id, is_connect_failure));
         });
     }
 }
@@ -144,6 +161,7 @@ pub async fn run_scanner(
         stop: stop.clone(),
         done,
         active: HashSet::new(),
+        failing: HashSet::new(),
         attempts: HashMap::new(),
     };
     let mut sweep = interval(Duration::from_secs(10));
@@ -155,8 +173,13 @@ pub async fn run_scanner(
                     break;
                 }
             }
-            Some(id) = finished.recv() => {
+            Some((id, is_connect_failure)) = finished.recv() => {
                 scanner.active.remove(&id);
+                if is_connect_failure {
+                    scanner.failing.insert(id);
+                } else {
+                    scanner.failing.remove(&id);
+                }
             }
             event = central_events.next() => {
                 match event {
@@ -383,4 +406,17 @@ async fn trigger_session(
 
     let _ = events.send(EngineEvent::DeviceDisconnected { id: device, name: label.to_string() });
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_connect_errors() {
+        assert!(is_connect_error("connection failed: Not connected"));
+        assert!(is_connect_error("service discovery timed out: deadline has elapsed"));
+        assert!(!is_connect_error("connection lost"));
+        assert!(!is_connect_error("another app took over the controller"));
+    }
 }
