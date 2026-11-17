@@ -13,7 +13,7 @@ Run `installer\FreeShift-Setup.exe`. It installs for your user only (no admin), 
 | Output | How | When to use |
 |---|---|---|
 | **Network** (default) | FreeShift advertises itself as an OpenBikeControl controller on your LAN (mDNS `_openbikecontrol._tcp`, TCP port 21587) and sends Shift Up / Shift Down messages | MyWhoosh on this PC or any device on the same network. No window focus needed |
-| **Keyboard keys** | Brings the window whose title starts with `MyWhoosh` to the front and presses I / K with scan codes | If MyWhoosh doesn't list FreeShift as a controller |
+| **Keyboard keys** | Brings the window whose title starts with `MyWhoosh` to the front and presses the key set for each action (I / K for shifting) | If MyWhoosh doesn't list FreeShift as a controller |
 
 If Windows asks whether FreeShift may use the network, allow **private** networks.
 
@@ -33,7 +33,9 @@ If Windows asks whether FreeShift may use the network, allow **private** network
 
 Current SRAM AXS indoor shifting works by bonding an app to the rear derailleur (hold its AXS button until the light flashes) and switching the derailleur into a mode where shifter presses are reported to the app instead of moving the derailleur. That bonding uses an encrypted key exchange whose UUIDs, key parameters and message format are not public, so FreeShift cannot do it today. Adding it needs a capture of the Bluetooth traffic during that setup on your own drivetrain. The custom trigger above only helps if a shifter exposes a plain notification on a press without bonding, which `freeshift-cli explore SRAM` shows.
 
-Default mapping: Plus → Shift up, Minus → Shift down, B → Shift down (so a right-pod-only Click v2 has both directions), Tap → up, Double tap → down. Change any button in **Buttons**; **Swap up / down** flips every mapping.
+The **Controller** card shows both Click v2 pods. Buttons light up when you press them; click one to pick its action: shift up / down, menu navigation (Up, Down, Left, Right, OK, Back, Menu, Home), steering, U-turn, power-up, emote, camera, HUD, map and workout controls. These are the OpenBikeControl button IDs; when MyWhoosh reports which ones it accepts, the rest are dimmed. In keyboard mode each action gets its own key.
+
+Default mapping: Plus → Shift up, Minus → Shift down, B → Shift down (so a right-pod-only Click v2 has both directions), A → OK, Y → Menu, Z → Back, Up / Down → menu up / down, Left / Right → steer, Tap → up, Double tap → down. **Swap shift up / down** flips only the gear actions.
 
 ## Hardware test checklist
 
@@ -49,7 +51,7 @@ Do these in order and report the results (copy the lines from **Activity** or fr
 
 ## Command-line tool
 
-`target\release\freeshift-cli.exe` (build it with `cargo build -p freeshift-cli --release`):
+Download `freeshift-cli.exe` from the latest release, or build it with `cargo build -p freeshift-cli --release` (it lands in `target\release`):
 
 | Command | What it does |
 |---|---|
@@ -62,6 +64,10 @@ Do these in order and report the results (copy the lines from **Activity** or fr
 | `freeshift-cli swap` / `output obc\|keys` / `keys I K` / `trigger <name> <uuid>` | Edit settings |
 
 Settings live in `%APPDATA%\FreeShift\config.json`; the app and the CLI share them.
+
+## Testing on another PC
+
+[docs/LAPTOP_TEST_PROMPT.md](docs/LAPTOP_TEST_PROMPT.md) is a prompt for Claude Code on the PC next to the bike. It downloads the release, walks through the Zwift Click, MyWhoosh and read-only SRAM tests, decodes an Android Bluetooth recording with [tools/btsnoop_dump.py](tools/btsnoop_dump.py), and writes everything into a `FreeShift-test` folder with a `REPORT.md`.
 
 ## Build from source
 
