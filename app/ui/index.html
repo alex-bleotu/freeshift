@@ -25,13 +25,6 @@
           <button id="swap" class="secondary" type="button">Swap shift up / down</button>
         </div>
         <div id="pods" class="pods"></div>
-        <section id="editor" class="editor" aria-labelledby="editor-title" hidden>
-          <div class="editor-head">
-            <h3 id="editor-title"></h3>
-            <button id="editor-close" type="button" class="link-muted" aria-label="Close action picker">Close</button>
-          </div>
-          <div id="editor-groups"></div>
-        </section>
       </section>
 
       <div class="grid">
@@ -112,6 +105,21 @@
         <ol id="log" class="log" aria-live="polite"></ol>
       </section>
     </main>
+
+    <dialog id="editor" class="editor-dialog" aria-labelledby="editor-title" aria-describedby="editor-current">
+      <div class="editor-body">
+        <div class="editor-head">
+          <div>
+            <h3 id="editor-title"></h3>
+            <p id="editor-current" class="muted small flush"></p>
+          </div>
+          <button id="editor-close" type="button" class="icon-button" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <div id="editor-groups"></div>
+      </div>
+    </dialog>
 
     <div id="save-bar" class="save-bar" hidden>
       <span>Unsaved changes</span>

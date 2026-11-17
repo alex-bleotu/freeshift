@@ -6,22 +6,22 @@ const PODS = [
     id: "left",
     title: "Left pod",
     buttons: [
-      { button: "Minus", glyph: "−", name: "Minus (shift)", shape: "paddle", x: 50, y: 14 },
-      { button: "Up", glyph: "▲", name: "Up", x: 50, y: 42 },
-      { button: "Left", glyph: "◀", name: "Left", x: 25, y: 63 },
-      { button: "Right", glyph: "▶", name: "Right", x: 75, y: 63 },
-      { button: "Down", glyph: "▼", name: "Down", x: 50, y: 84 },
+      { button: "Up", glyph: "▲", name: "Up", x: 50, y: 19 },
+      { button: "Left", glyph: "◀", name: "Left", x: 25, y: 40 },
+      { button: "Right", glyph: "▶", name: "Right", x: 75, y: 40 },
+      { button: "Down", glyph: "▼", name: "Down", x: 50, y: 61 },
+      { button: "Minus", glyph: "−", name: "Minus (shift)", shape: "paddle", x: 50, y: 86 },
     ],
   },
   {
     id: "right",
     title: "Right pod",
     buttons: [
-      { button: "Plus", glyph: "+", name: "Plus (shift)", shape: "paddle", x: 50, y: 14 },
-      { button: "Y", glyph: "Y", name: "Y", x: 50, y: 42 },
-      { button: "Z", glyph: "Z", name: "Z", x: 25, y: 63 },
-      { button: "A", glyph: "A", name: "A", x: 75, y: 63 },
-      { button: "B", glyph: "B", name: "B", x: 50, y: 84 },
+      { button: "Y", glyph: "Y", name: "Y", x: 50, y: 19 },
+      { button: "Z", glyph: "Z", name: "Z", x: 25, y: 40 },
+      { button: "A", glyph: "A", name: "A", x: 75, y: 40 },
+      { button: "B", glyph: "B", name: "B", x: 50, y: 61 },
+      { button: "Plus", glyph: "+", name: "Plus (shift)", shape: "paddle", x: 50, y: 86 },
     ],
   },
   {
@@ -255,13 +255,13 @@ function renderPods() {
 
 function renderEditor() {
   const editor = element("editor");
-  if (!state.selected) {
-    editor.hidden = true;
+  if (!state.selected || !editor.open) {
     return;
   }
   const info = buttonInfo(state.selected);
   const current = state.draft.mapping[state.selected] || "None";
   element("editor-title").textContent = info.pod ? `${info.name} on the ${info.pod.title.toLowerCase()}` : info.name;
+  element("editor-current").textContent = `Now: ${actionLabel(current)}`;
   const supported = supportedActions();
   const isKeyboard = state.draft.output === "Keyboard";
   const groups = element("editor-groups");
@@ -292,21 +292,38 @@ function renderEditor() {
         chip.classList.add("unsupported");
         chip.title = "The connected trainer app did not list this action";
       }
-      chip.addEventListener("click", () => assignAction(state.selected, action));
+      chip.addEventListener("click", () => {
+        assignAction(state.selected, action);
+        editor.close();
+      });
       chips.append(chip);
     }
     group.append(chips);
     groups.append(group);
   }
-  editor.hidden = false;
 }
 
 function selectButton(button) {
-  state.selected = state.selected === button ? null : button;
+  const editor = element("editor");
+  state.selected = button;
   renderPods();
+  editor.showModal();
   renderEditor();
-  if (state.selected) {
-    element("editor").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const current = editor.querySelector('.chip[aria-pressed="true"]');
+  if (current) {
+    current.focus();
+  }
+}
+
+function closeEditor() {
+  const button = state.selected;
+  state.selected = null;
+  renderPods();
+  if (button) {
+    const pad = document.querySelector(`.pad-button[data-button="${button}"]`);
+    if (pad) {
+      pad.focus();
+    }
   }
 }
 
@@ -317,7 +334,6 @@ function assignAction(button, action) {
     state.draft.mapping[button] = action;
   }
   renderPods();
-  renderEditor();
   renderKeys();
   updateSaveBar();
 }
@@ -668,10 +684,12 @@ function wireUp() {
   element("save").addEventListener("click", save);
   element("revert").addEventListener("click", revert);
   element("swap").addEventListener("click", swap);
-  element("editor-close").addEventListener("click", () => selectButton(state.selected));
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.selected) {
-      selectButton(state.selected);
+  const editor = element("editor");
+  element("editor-close").addEventListener("click", () => editor.close());
+  editor.addEventListener("close", closeEditor);
+  editor.addEventListener("click", (event) => {
+    if (event.target === editor) {
+      editor.close();
     }
   });
 }

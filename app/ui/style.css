@@ -111,6 +111,7 @@ h2 {
 .grid {
   columns: 300px 3;
   column-gap: 16px;
+  margin-block-end: 16px;
 }
 
 .card {
@@ -402,6 +403,12 @@ button.link {
   white-space: nowrap;
 }
 
+@media (max-width: 663px) {
+  .grid {
+    margin-block-end: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .shift-arrow,
   .pad-button {
@@ -544,34 +551,63 @@ button.link {
   font-weight: 400;
 }
 
-.editor {
-  border-block-start: 1px solid var(--border);
-  padding-block: 16px 8px;
+.editor-dialog {
+  inline-size: min(560px, calc(100vw - 32px));
+  max-block-size: calc(100vh - 64px);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 
-.editor[hidden] {
-  display: none;
+.editor-dialog::backdrop {
+  background: rgba(8, 12, 16, 0.6);
+}
+
+.editor-body {
+  padding: 20px;
 }
 
 .editor-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  margin-block-end: 8px;
+  gap: 12px;
+  margin-block-end: 16px;
 }
 
 .editor-head h3 {
-  margin: 0;
-  font-size: 14px;
+  margin: 0 0 4px;
+  font-size: 16px;
   font-weight: 600;
 }
 
-button.link-muted {
-  border: none;
-  background: none;
+.icon-button {
+  display: grid;
+  place-items: center;
+  inline-size: 32px;
+  block-size: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
   color: var(--muted);
-  padding: 4px 8px;
-  font-weight: 400;
+}
+
+.icon-button svg {
+  inline-size: 16px;
+  block-size: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.icon-button:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 .chip-group {
