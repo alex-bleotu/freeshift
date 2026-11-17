@@ -28,8 +28,7 @@ pub struct Config {
     pub mapping: BTreeMap<Button, Action>,
     pub controller_name: String,
     pub obc_port: u16,
-    pub shift_up_key: String,
-    pub shift_down_key: String,
+    pub keys: BTreeMap<Action, String>,
     pub key_hold_ms: u64,
     pub focus_window_prefix: String,
     pub zwift_enabled: bool,
@@ -42,7 +41,14 @@ impl Default for Config {
         let mapping = BTreeMap::from([
             (Button::Plus, Action::ShiftUp),
             (Button::Minus, Action::ShiftDown),
+            (Button::Up, Action::Up),
+            (Button::Down, Action::Down),
+            (Button::Left, Action::SteerLeft),
+            (Button::Right, Action::SteerRight),
+            (Button::A, Action::Select),
             (Button::B, Action::ShiftDown),
+            (Button::Y, Action::Menu),
+            (Button::Z, Action::Back),
             (Button::Tap, Action::ShiftUp),
             (Button::DoubleTap, Action::ShiftDown),
         ]);
@@ -51,8 +57,7 @@ impl Default for Config {
             mapping,
             controller_name: "FreeShift".to_string(),
             obc_port: 21587,
-            shift_up_key: "I".to_string(),
-            shift_down_key: "K".to_string(),
+            keys: default_keys(),
             key_hold_ms: 40,
             focus_window_prefix: "MyWhoosh".to_string(),
             zwift_enabled: true,
@@ -60,6 +65,30 @@ impl Default for Config {
             double_tap_ms: 350,
         }
     }
+}
+
+pub fn default_keys() -> BTreeMap<Action, String> {
+    [
+        (Action::ShiftUp, "I"),
+        (Action::ShiftDown, "K"),
+        (Action::Up, "Up"),
+        (Action::Down, "Down"),
+        (Action::Left, "Left"),
+        (Action::Right, "Right"),
+        (Action::Select, "Enter"),
+        (Action::Back, "Escape"),
+        (Action::Menu, "Escape"),
+        (Action::SteerLeft, "A"),
+        (Action::SteerRight, "D"),
+        (Action::Emote, "1"),
+        (Action::UTurn, "U"),
+        (Action::CameraView, "Tab"),
+        (Action::HudToggle, "H"),
+        (Action::PowerUp, "Space"),
+    ]
+    .into_iter()
+    .map(|(action, key)| (action, key.to_string()))
+    .collect()
 }
 
 impl Config {
@@ -114,7 +143,7 @@ mod tests {
     fn missing_fields_fall_back_to_defaults() {
         let parsed: Config = serde_json::from_str(r#"{"output":"Keyboard"}"#).unwrap();
         assert_eq!(parsed.output, OutputMode::Keyboard);
-        assert_eq!(parsed.shift_up_key, "I");
+        assert_eq!(parsed.keys.get(&Action::ShiftUp).map(String::as_str), Some("I"));
         assert_eq!(parsed.action_for(Button::Plus), Action::ShiftUp);
     }
 
@@ -124,6 +153,7 @@ mod tests {
         config.swap_directions();
         assert_eq!(config.action_for(Button::Plus), Action::ShiftDown);
         assert_eq!(config.action_for(Button::Minus), Action::ShiftUp);
-        assert_eq!(config.action_for(Button::A), Action::None);
+        assert_eq!(config.action_for(Button::A), Action::Select);
+        assert_eq!(config.action_for(Button::Left), Action::SteerLeft);
     }
 }

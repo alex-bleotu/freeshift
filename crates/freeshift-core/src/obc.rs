@@ -15,16 +15,44 @@ pub const SERVICE_TYPE: &str = "_openbikecontrol._tcp.local.";
 pub const BLE_SERVICE_UUID: &str = "d273f680-d548-419d-b9d1-fa0472345229";
 pub const BUTTON_STATE: u8 = 0x01;
 pub const DEVICE_STATUS: u8 = 0x02;
-pub const SHIFT_UP: u8 = 0x01;
-pub const SHIFT_DOWN: u8 = 0x02;
+
+pub const APP_INFO: u8 = 0x04;
 
 pub fn button_message(action: Action, pressed: bool) -> Option<Vec<u8>> {
-    let button = match action {
-        Action::ShiftUp => SHIFT_UP,
-        Action::ShiftDown => SHIFT_DOWN,
-        Action::None => return None,
-    };
+    let button = action.obc_id()?;
     Some(vec![BUTTON_STATE, button, u8::from(pressed)])
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppInfo {
+    pub app: String,
+    pub version: String,
+    pub supported: Vec<Action>,
+    pub supports_all: bool,
+}
+
+pub fn parse_app_info(bytes: &[u8]) -> Option<AppInfo> {
+    if bytes.first() != Some(&APP_INFO) {
+        return None;
+    }
+    let mut position = 2;
+    let text = |position: &mut usize| -> Option<String> {
+        let length = usize::from(*bytes.get(*position)?);
+        let start = *position + 1;
+        let value = bytes.get(start..start + length)?;
+        *position = start + length;
+        Some(String::from_utf8_lossy(value).into_owned())
+    };
+    let app = text(&mut position)?;
+    let version = text(&mut position)?;
+    let count = usize::from(*bytes.get(position)?);
+    let ids = bytes.get(position + 1..position + 1 + count)?;
+    Some(AppInfo {
+        app,
+        version,
+        supported: ids.iter().filter_map(|id| Action::from_obc_id(*id)).collect(),
+        supports_all: count == 0,
+    })
 }
 
 pub fn status_message() -> Vec<u8> {
@@ -175,9 +203,23 @@ async fn serve_client(
                     match read {
                         Ok(0) => break,
                         Ok(count) => {
-                            let _ = events.send(EngineEvent::Log {
-                                message: format!("{peer} sent {}", crate::model::hex(&buffer[..count])),
-                            });
+                            let bytes = &buffer[..count];
+                            match parse_app_info(bytes) {
+                                Some(info) => {
+                                    let supported = if info.supports_all { Action::ALL.to_vec() } else { info.supported };
+                                    let _ = events.send(EngineEvent::TrainerApp {
+                                        peer: peer.clone(),
+                                        app: info.app,
+                                        version: info.version,
+                                        supported,
+                                    });
+                                }
+                                None => {
+                                    let _ = events.send(EngineEvent::Log {
+                                        message: format!("{peer} sent {}", crate::model::hex(bytes)),
+                                    });
+                                }
+                            }
                         }
                         Err(error) => {
                             reason = format!("read failed: {error}");
@@ -276,7 +318,31 @@ mod tests {
         assert_eq!(button_message(Action::ShiftUp, false), Some(vec![0x01, 0x01, 0x00]));
         assert_eq!(button_message(Action::ShiftDown, true), Some(vec![0x01, 0x02, 0x01]));
         assert_eq!(button_message(Action::ShiftDown, false), Some(vec![0x01, 0x02, 0x00]));
+        assert_eq!(button_message(Action::Menu, true), Some(vec![0x01, 0x16, 0x01]));
+        assert_eq!(button_message(Action::Select, false), Some(vec![0x01, 0x14, 0x00]));
         assert_eq!(button_message(Action::None, true), None);
+    }
+
+    #[test]
+    fn parses_the_spec_app_info_example() {
+        let mut bytes = vec![0x04, 0x01, 0x05];
+        bytes.extend(b"zwift");
+        bytes.push(0x06);
+        bytes.extend(b"1.52.0");
+        bytes.extend([0x04, 0x01, 0x02, 0x10, 0x14]);
+        let info = parse_app_info(&bytes).unwrap();
+        assert_eq!(info.app, "zwift");
+        assert_eq!(info.version, "1.52.0");
+        assert_eq!(info.supported, vec![Action::ShiftUp, Action::ShiftDown, Action::Up, Action::Select]);
+        assert!(!info.supports_all);
+    }
+
+    #[test]
+    fn app_info_with_zero_buttons_means_all() {
+        let bytes = [0x04, 0x01, 0x02, b'm', b'w', 0x01, b'5', 0x00];
+        assert!(parse_app_info(&bytes).unwrap().supports_all);
+        assert_eq!(parse_app_info(&[0x04, 0x01, 0x09, b'x']), None);
+        assert_eq!(parse_app_info(&[0x01, 0x01, 0x01]), None);
     }
 
     #[test]

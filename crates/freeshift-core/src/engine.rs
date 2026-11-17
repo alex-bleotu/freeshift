@@ -53,22 +53,30 @@ pub fn spawn_output(
         }
         OutputMode::Keyboard => {
             let mut keys = HashMap::new();
-            for (action, name) in [(Action::ShiftUp, &config.shift_up_key), (Action::ShiftDown, &config.shift_down_key)] {
+            for (action, name) in &config.keys {
+                if name.trim().is_empty() {
+                    continue;
+                }
                 match keyboard::parse_key(name) {
                     Some(key) => {
-                        keys.insert(action, key);
+                        keys.insert(*action, key);
                     }
                     None => {
-                        let _ = report.send(EngineEvent::Log { message: format!("Unknown key \"{name}\" for {action:?}") });
+                        let _ = report.send(EngineEvent::Log {
+                            message: format!("Unknown key \"{name}\" for {}", action.label()),
+                        });
                     }
                 }
             }
             let hold = Duration::from_millis(config.key_hold_ms);
             let prefix = config.focus_window_prefix.clone();
             let target = if prefix.trim().is_empty() { "the active window".to_string() } else { format!("the \"{prefix}\" window") };
+            let key_of = |action: Action| config.keys.get(&action).cloned().unwrap_or_else(|| "none".to_string());
             let description = format!(
-                "Keyboard output: {} shifts up, {} shifts down, sent to {target}",
-                config.shift_up_key, config.shift_down_key
+                "Keyboard output: {} shifts up, {} shifts down, {} keys in total, sent to {target}",
+                key_of(Action::ShiftUp),
+                key_of(Action::ShiftDown),
+                keys.len()
             );
             tokio::spawn(async move {
                 if let Err(error) = keyboard::run(keys, hold, prefix, description, receiver, events, stop).await {
@@ -138,7 +146,12 @@ mod tests {
         let (events, _keep) = broadcast::channel(64);
         let (raw, raw_receiver) = mpsc::unbounded_channel();
         let (actions, mut action_receiver) = mpsc::unbounded_channel();
-        let task = tokio::spawn(dispatch(Config::default().mapping, raw_receiver, actions, events));
+        let mapping = BTreeMap::from([
+            (Button::Plus, Action::ShiftUp),
+            (Button::Minus, Action::ShiftDown),
+            (Button::DoubleTap, Action::ShiftDown),
+        ]);
+        let task = tokio::spawn(dispatch(mapping, raw_receiver, actions, events));
 
         raw.send(RawInput::State { device: "left".into(), pressed: vec![Button::Plus] }).unwrap();
         raw.send(RawInput::State { device: "right".into(), pressed: vec![Button::Plus] }).unwrap();

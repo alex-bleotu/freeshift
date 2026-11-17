@@ -38,6 +38,8 @@ pub fn parse_key(name: &str) -> Option<Key> {
     }
     let virtual_key: u32 = match upper.as_str() {
         "SPACE" => 0x20,
+        "ESCAPE" | "ESC" => 0x1B,
+        "BACKSPACE" => 0x08,
         "ENTER" => 0x0D,
         "TAB" => 0x09,
         "MINUS" | "-" => 0xBD,
@@ -192,6 +194,12 @@ mod tests {
     fn letters_map_to_scan_codes() {
         assert_eq!(parse_key("i"), Some(Key { scan: 0x17, extended: false }));
         assert_eq!(parse_key("K"), Some(Key { scan: 0x25, extended: false }));
+    }
+
+    #[test]
+    fn escape_and_tab_are_known() {
+        assert_eq!(parse_key("Escape"), Some(Key { scan: 0x01, extended: false }));
+        assert_eq!(parse_key("tab"), Some(Key { scan: 0x0F, extended: false }));
     }
 
     #[test]
