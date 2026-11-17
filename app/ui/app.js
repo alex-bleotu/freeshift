@@ -1,40 +1,65 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const BUTTONS = [
-  ["Plus", "Plus (right shift)"],
-  ["Minus", "Minus (left shift)"],
-  ["A", "A"],
-  ["B", "B"],
-  ["Y", "Y"],
-  ["Z", "Z"],
-  ["Up", "Up"],
-  ["Down", "Down"],
-  ["Left", "Left"],
-  ["Right", "Right"],
-  ["Tap", "Tap (custom trigger)"],
-  ["DoubleTap", "Double tap (custom trigger)"],
+const PODS = [
+  {
+    id: "left",
+    title: "Left pod",
+    buttons: [
+      { button: "Minus", glyph: "−", name: "Minus (shift)", shape: "paddle", x: 50, y: 14 },
+      { button: "Up", glyph: "▲", name: "Up", x: 50, y: 42 },
+      { button: "Left", glyph: "◀", name: "Left", x: 25, y: 63 },
+      { button: "Right", glyph: "▶", name: "Right", x: 75, y: 63 },
+      { button: "Down", glyph: "▼", name: "Down", x: 50, y: 84 },
+    ],
+  },
+  {
+    id: "right",
+    title: "Right pod",
+    buttons: [
+      { button: "Plus", glyph: "+", name: "Plus (shift)", shape: "paddle", x: 50, y: 14 },
+      { button: "Y", glyph: "Y", name: "Y", x: 50, y: 42 },
+      { button: "Z", glyph: "Z", name: "Z", x: 25, y: 63 },
+      { button: "A", glyph: "A", name: "A", x: 75, y: 63 },
+      { button: "B", glyph: "B", name: "B", x: 50, y: 84 },
+    ],
+  },
+  {
+    id: "extra",
+    title: "Custom trigger",
+    compact: true,
+    buttons: [
+      { button: "Tap", glyph: "1×", name: "Tap", x: 30, y: 50 },
+      { button: "DoubleTap", glyph: "2×", name: "Double tap", x: 70, y: 50 },
+    ],
+  },
 ];
 
-const ACTIONS = [
-  ["None", "Nothing"],
-  ["ShiftUp", "Shift up"],
-  ["ShiftDown", "Shift down"],
+const ACTION_GROUPS = [
+  ["Gears", ["ShiftUp", "ShiftDown"]],
+  ["Menus", ["Up", "Down", "Left", "Right", "Select", "Back", "Menu", "Home"]],
+  ["Riding", ["SteerLeft", "SteerRight", "UTurn", "PowerUp", "Emote"]],
+  ["View", ["CameraView", "HudToggle", "MapToggle"]],
+  ["Workout", ["IncreaseDifficulty", "DecreaseDifficulty", "SkipInterval", "Pause", "Resume"]],
 ];
 
 const LOG_LIMIT = 300;
 
 const OUTPUT_FAILURE = /^(OpenBikeControl|Keyboard) output stopped/;
 
-const KEY_NAME = /^([a-z0-9]|up|down|left|right|pageup|pagedown|home|end|space|enter|tab|minus|plus|comma|period|f([1-9]|1[0-2]))$/i;
+const KEY_NAME = /^([a-z0-9]|up|down|left|right|pageup|pagedown|home|end|space|enter|tab|escape|esc|backspace|minus|plus|comma|period|f([1-9]|1[0-2]))$/i;
 
 const state = {
   saved: null,
   draft: null,
   devices: new Map(),
   clients: [],
+  trainerApps: new Map(),
+  actionLabels: new Map(),
   output: "",
   outputError: "",
+  selected: null,
+  lastButton: "",
   counts: { ShiftUp: 0, ShiftDown: 0 },
 };
 
@@ -49,14 +74,48 @@ function isDirty() {
 }
 
 function updateSaveBar() {
-  element("save-bar").hidden = !isDirty();
+  const isShown = isDirty();
+  element("save-bar").hidden = !isShown;
+  document.body.classList.toggle("has-save-bar", isShown);
+}
+
+function actionLabel(action) {
+  if (!action || action === "None") {
+    return "Nothing";
+  }
+
+  return state.actionLabels.get(action) || action;
+}
+
+function buttonInfo(button) {
+  for (const pod of PODS) {
+    const match = pod.buttons.find((entry) => entry.button === button);
+    if (match) {
+      return { ...match, pod };
+    }
+  }
+
+  return { button, name: button, glyph: button, pod: null };
+}
+
+function supportedActions() {
+  if (!state.saved || state.saved.output !== "OpenBikeControl" || state.trainerApps.size === 0) {
+    return null;
+  }
+  const supported = new Set();
+  for (const app of state.trainerApps.values()) {
+    for (const action of app.supported) {
+      supported.add(action);
+    }
+  }
+
+  return supported;
 }
 
 function appendLog(line) {
   const list = element("log");
   const item = document.createElement("li");
-  const time = new Date().toLocaleTimeString();
-  item.textContent = `${time}  ${line}`;
+  item.textContent = `${new Date().toLocaleTimeString()}  ${line}`;
   list.prepend(item);
   while (list.children.length > LOG_LIMIT) {
     list.lastElementChild.remove();
@@ -67,7 +126,8 @@ function renderStatus() {
   const pill = element("output-status");
   pill.classList.remove("ok", "warn");
   if (state.clients.length > 0) {
-    pill.textContent = `Trainer app connected (${state.clients.length})`;
+    const app = [...state.trainerApps.values()][0];
+    pill.textContent = app ? `${app.app} connected` : `Trainer app connected (${state.clients.length})`;
     pill.classList.add("ok");
     return;
   }
@@ -108,44 +168,197 @@ function renderDevices() {
     list.append(item);
   }
   element("devices-empty").hidden = state.devices.size > 0;
+  const apps = element("apps");
+  apps.replaceChildren();
+  for (const app of state.trainerApps.values()) {
+    const item = document.createElement("li");
+    const text = document.createElement("div");
+    const name = document.createElement("div");
+    name.className = "device-name";
+    name.textContent = `${app.app} ${app.version}`.trim();
+    const detail = document.createElement("div");
+    detail.className = "device-kind";
+    detail.textContent = `Trainer app at ${app.peer}, accepts ${app.supported.length} actions`;
+    text.append(name, detail);
+    item.append(text);
+    apps.append(item);
+  }
 }
 
-function renderMapping() {
-  const body = element("mapping");
-  body.replaceChildren();
-  for (const [button, label] of BUTTONS) {
-    const row = document.createElement("tr");
-    const nameCell = document.createElement("td");
-    const wrapper = document.createElement("span");
-    wrapper.className = "button-name";
-    const dot = document.createElement("span");
-    dot.className = "dot";
-    dot.id = `dot-${button}`;
-    dot.setAttribute("aria-hidden", "true");
-    const text = document.createElement("span");
-    text.textContent = label;
-    wrapper.append(dot, text);
-    nameCell.append(wrapper);
-    const actionCell = document.createElement("td");
-    const select = document.createElement("select");
-    select.setAttribute("aria-label", `Action for ${label}`);
-    for (const [value, actionLabel] of ACTIONS) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = actionLabel;
-      select.append(option);
+function createPadButton(entry) {
+  const action = state.draft.mapping[entry.button] || "None";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = entry.shape === "paddle" ? "pad-button paddle" : "pad-button";
+  button.dataset.button = entry.button;
+  button.style.left = `${entry.x}%`;
+  button.style.top = `${entry.y}%`;
+  button.textContent = entry.glyph;
+  button.setAttribute("aria-label", `${entry.name}: ${actionLabel(action)}. Change action`);
+  button.setAttribute("aria-pressed", String(state.selected === entry.button));
+  button.classList.toggle("unassigned", action === "None");
+  button.addEventListener("click", () => selectButton(entry.button));
+
+  return button;
+}
+
+function createLegendRow(entry) {
+  const action = state.draft.mapping[entry.button] || "None";
+  const item = document.createElement("li");
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "legend-row";
+  row.dataset.button = entry.button;
+  row.setAttribute("aria-pressed", String(state.selected === entry.button));
+  const glyph = document.createElement("span");
+  glyph.className = "glyph";
+  glyph.setAttribute("aria-hidden", "true");
+  glyph.textContent = entry.glyph;
+  const name = document.createElement("span");
+  name.className = "legend-name";
+  name.textContent = entry.name;
+  const assigned = document.createElement("span");
+  assigned.className = "legend-action";
+  assigned.classList.toggle("unassigned", action === "None");
+  assigned.textContent = actionLabel(action);
+  row.append(glyph, name, assigned);
+  row.addEventListener("click", () => selectButton(entry.button));
+  item.append(row);
+
+  return item;
+}
+
+function renderPods() {
+  const container = element("pods");
+  container.replaceChildren();
+  for (const pod of PODS) {
+    const wrap = document.createElement("section");
+    wrap.className = pod.compact ? "pod-wrap compact" : "pod-wrap";
+    wrap.setAttribute("aria-label", pod.title);
+    const title = document.createElement("h3");
+    title.className = "pod-title";
+    title.textContent = pod.title;
+    const shape = document.createElement("div");
+    shape.className = pod.compact ? "pod pod-compact" : "pod";
+    for (const entry of pod.buttons) {
+      shape.append(createPadButton(entry));
     }
-    select.value = state.draft.mapping[button] || "None";
-    select.addEventListener("change", () => {
-      if (select.value === "None") {
-        delete state.draft.mapping[button];
-      } else {
-        state.draft.mapping[button] = select.value;
+    const legend = document.createElement("ul");
+    legend.className = "legend";
+    for (const entry of pod.buttons) {
+      legend.append(createLegendRow(entry));
+    }
+    wrap.append(title, shape, legend);
+    container.append(wrap);
+  }
+}
+
+function renderEditor() {
+  const editor = element("editor");
+  if (!state.selected) {
+    editor.hidden = true;
+    return;
+  }
+  const info = buttonInfo(state.selected);
+  const current = state.draft.mapping[state.selected] || "None";
+  element("editor-title").textContent = info.pod ? `${info.name} on the ${info.pod.title.toLowerCase()}` : info.name;
+  const supported = supportedActions();
+  const isKeyboard = state.draft.output === "Keyboard";
+  const groups = element("editor-groups");
+  groups.replaceChildren();
+  const sections = [["", ["None"]], ...ACTION_GROUPS];
+  for (const [heading, actions] of sections) {
+    const group = document.createElement("div");
+    group.className = "chip-group";
+    if (heading) {
+      const label = document.createElement("h4");
+      label.textContent = heading;
+      group.append(label);
+    }
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    for (const action of actions) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.textContent = actionLabel(action);
+      chip.setAttribute("aria-pressed", String(current === action));
+      const hasNoKey = isKeyboard && action !== "None" && !(state.draft.keys[action] || "").trim();
+      const isUnsupported = !isKeyboard && supported !== null && action !== "None" && !supported.has(action);
+      if (hasNoKey) {
+        chip.classList.add("unsupported");
+        chip.title = "No key set for this action in keyboard mode";
+      } else if (isUnsupported) {
+        chip.classList.add("unsupported");
+        chip.title = "The connected trainer app did not list this action";
       }
+      chip.addEventListener("click", () => assignAction(state.selected, action));
+      chips.append(chip);
+    }
+    group.append(chips);
+    groups.append(group);
+  }
+  editor.hidden = false;
+}
+
+function selectButton(button) {
+  state.selected = state.selected === button ? null : button;
+  renderPods();
+  renderEditor();
+  if (state.selected) {
+    element("editor").scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+}
+
+function assignAction(button, action) {
+  if (action === "None") {
+    delete state.draft.mapping[button];
+  } else {
+    state.draft.mapping[button] = action;
+  }
+  renderPods();
+  renderEditor();
+  renderKeys();
+  updateSaveBar();
+}
+
+function usedActions() {
+  const used = new Set(Object.values(state.draft.mapping).filter((action) => action !== "None"));
+  const ordered = ACTION_GROUPS.flatMap(([, actions]) => actions);
+
+  return ordered.filter((action) => used.has(action));
+}
+
+function renderKeys() {
+  const body = element("keys");
+  body.replaceChildren();
+  for (const action of usedActions()) {
+    const row = document.createElement("tr");
+    const labelCell = document.createElement("td");
+    labelCell.textContent = actionLabel(action);
+    const inputCell = document.createElement("td");
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 10;
+    input.value = state.draft.keys[action] || "";
+    input.setAttribute("aria-label", `Key for ${actionLabel(action)}`);
+    input.addEventListener("input", () => {
+      const value = input.value.trim();
+      if (value && !KEY_NAME.test(value)) {
+        input.setCustomValidity("Unknown key");
+        return;
+      }
+      input.setCustomValidity("");
+      if (value) {
+        state.draft.keys[action] = value;
+      } else {
+        delete state.draft.keys[action];
+      }
+      renderEditor();
       updateSaveBar();
     });
-    actionCell.append(select);
-    row.append(nameCell, actionCell);
+    inputCell.append(input);
+    row.append(labelCell, inputCell);
     body.append(row);
   }
 }
@@ -186,14 +399,14 @@ function renderForm() {
   }
   element("controller-name").value = config.controllerName;
   element("obc-port").value = config.obcPort;
-  element("shift-up-key").value = config.shiftUpKey;
-  element("shift-down-key").value = config.shiftDownKey;
   element("focus-window").value = config.focusWindowPrefix;
   element("key-hold").value = config.keyHoldMs;
   element("double-tap").value = config.doubleTapMs;
   element("zwift-enabled").checked = config.zwiftEnabled;
   renderOutputFields();
-  renderMapping();
+  renderPods();
+  renderEditor();
+  renderKeys();
   renderTriggers();
   updateSaveBar();
 }
@@ -214,12 +427,6 @@ function bindField(id, key, parse) {
   });
 }
 
-function parseKey(text) {
-  const value = text.trim();
-
-  return KEY_NAME.test(value) ? value : null;
-}
-
 function parseInteger(minimum, maximum) {
   return (text) => {
     const value = Number.parseInt(text, 10);
@@ -232,10 +439,15 @@ function parseInteger(minimum, maximum) {
 }
 
 function flashArrow(action) {
-  const id = action === "ShiftUp" ? "shift-up" : "shift-down";
-  const arrow = element(id);
+  const arrow = element(action === "ShiftUp" ? "shift-up" : "shift-down");
   arrow.classList.add("active");
   setTimeout(() => arrow.classList.remove("active"), 220);
+}
+
+function markPressed(button, isPressed) {
+  for (const node of document.querySelectorAll(`[data-button="${button}"]`)) {
+    node.classList.toggle("down", isPressed);
+  }
 }
 
 function handleEvent(event) {
@@ -268,22 +480,25 @@ function handleEvent(event) {
     case "unlocked":
       appendLog(`${event.id} answered the handshake`);
       break;
-    case "button": {
-      const dot = element(`dot-${event.button}`);
-      if (dot) {
-        dot.classList.toggle("down", event.pressed);
-      }
+    case "button":
+      markPressed(event.button, event.pressed);
       if (event.pressed) {
-        element("last-button").textContent = `Last button: ${event.button}`;
+        state.lastButton = buttonInfo(event.button).name;
+        const action = state.draft.mapping[event.button] || "None";
+        if (action === "None") {
+          element("last-action").textContent = `${state.lastButton}: nothing assigned`;
+        }
       }
       break;
-    }
     case "action":
-      if (event.pressed && event.action in state.counts) {
-        state.counts[event.action] += 1;
-        element("count-up").textContent = state.counts.ShiftUp;
-        element("count-down").textContent = state.counts.ShiftDown;
-        flashArrow(event.action);
+      if (event.pressed) {
+        element("last-action").textContent = `${actionLabel(event.action)}${state.lastButton ? ` (${state.lastButton})` : ""}`;
+        if (event.action in state.counts) {
+          state.counts[event.action] += 1;
+          element("count-up").textContent = state.counts.ShiftUp;
+          element("count-down").textContent = state.counts.ShiftDown;
+          flashArrow(event.action);
+        }
       }
       break;
     case "outputClient":
@@ -292,7 +507,17 @@ function handleEvent(event) {
         appendLog(`Trainer app connected from ${event.peer}`);
       } else {
         state.clients = state.clients.filter((peer) => peer !== event.peer);
+        state.trainerApps.delete(event.peer);
+        renderDevices();
+        renderEditor();
       }
+      renderStatus();
+      break;
+    case "trainerApp":
+      state.trainerApps.set(event.peer, { peer: event.peer, app: event.app, version: event.version, supported: event.supported });
+      appendLog(`${event.peer} is ${event.app} ${event.version}`);
+      renderDevices();
+      renderEditor();
       renderStatus();
       break;
     case "outputReady":
@@ -308,16 +533,23 @@ function handleEvent(event) {
   }
 }
 
+function applyStatus(snapshot) {
+  state.devices = new Map(snapshot.devices.map((device) => [device.id, device]));
+  state.clients = snapshot.clients;
+  state.trainerApps = new Map(snapshot.trainerApps.map((app) => [app.peer, app]));
+  state.output = snapshot.output;
+  element("autostart").checked = snapshot.autostart;
+  renderDevices();
+  renderStatus();
+}
+
 async function refresh() {
   try {
     const snapshot = await invoke("get_snapshot");
+    state.actionLabels = new Map(snapshot.actions.map((action) => [action.id, action.label]));
     state.saved = snapshot.config;
     state.draft = clone(snapshot.config);
-    state.devices = new Map(snapshot.devices.map((device) => [device.id, device]));
-    state.clients = snapshot.clients;
-    state.output = snapshot.output;
     state.outputError = "";
-    element("autostart").checked = snapshot.autostart;
     element("config-path").textContent = snapshot.configPath;
     const list = element("log");
     list.replaceChildren();
@@ -325,8 +557,7 @@ async function refresh() {
       appendLog(line);
     }
     renderForm();
-    renderDevices();
-    renderStatus();
+    applyStatus(snapshot);
   } catch (error) {
     appendLog(`Could not load settings: ${error}`);
   }
@@ -334,13 +565,7 @@ async function refresh() {
 
 async function refreshStatus() {
   try {
-    const snapshot = await invoke("get_snapshot");
-    state.devices = new Map(snapshot.devices.map((device) => [device.id, device]));
-    state.clients = snapshot.clients;
-    state.output = snapshot.output;
-    element("autostart").checked = snapshot.autostart;
-    renderDevices();
-    renderStatus();
+    applyStatus(await invoke("get_snapshot"));
   } catch (error) {
     appendLog(`Could not read status: ${error}`);
   }
@@ -353,6 +578,7 @@ async function save() {
     await invoke("save_config", { config: state.draft });
     state.saved = clone(state.draft);
     updateSaveBar();
+    renderEditor();
   } catch (error) {
     appendLog(`Save failed: ${error}`);
   } finally {
@@ -370,7 +596,8 @@ async function swap() {
         state.draft.mapping[button] = "ShiftUp";
       }
     }
-    renderMapping();
+    renderPods();
+    renderEditor();
     updateSaveBar();
     return;
   }
@@ -410,18 +637,25 @@ function addTrigger(event) {
   updateSaveBar();
 }
 
+function revert() {
+  state.draft = clone(state.saved);
+  for (const input of document.querySelectorAll("input")) {
+    input.setCustomValidity("");
+  }
+  renderForm();
+}
+
 function wireUp() {
   for (const radio of document.querySelectorAll('input[name="output"]')) {
     radio.addEventListener("change", () => {
       state.draft.output = radio.value;
       renderOutputFields();
+      renderEditor();
       updateSaveBar();
     });
   }
   bindField("controller-name", "controllerName", (text) => (text.trim() ? text.trim() : null));
   bindField("obc-port", "obcPort", parseInteger(1024, 65535));
-  bindField("shift-up-key", "shiftUpKey", parseKey);
-  bindField("shift-down-key", "shiftDownKey", parseKey);
   bindField("focus-window", "focusWindowPrefix", (text) => text);
   bindField("key-hold", "keyHoldMs", parseInteger(10, 500));
   bindField("double-tap", "doubleTapMs", parseInteger(150, 800));
@@ -432,14 +666,14 @@ function wireUp() {
   element("autostart").addEventListener("change", toggleAutostart);
   element("trigger-form").addEventListener("submit", addTrigger);
   element("save").addEventListener("click", save);
-  element("revert").addEventListener("click", () => {
-    state.draft = clone(state.saved);
-    for (const input of document.querySelectorAll("input")) {
-      input.setCustomValidity("");
-    }
-    renderForm();
-  });
+  element("revert").addEventListener("click", revert);
   element("swap").addEventListener("click", swap);
+  element("editor-close").addEventListener("click", () => selectButton(state.selected));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.selected) {
+      selectButton(state.selected);
+    }
+  });
 }
 
 async function showVersion() {
