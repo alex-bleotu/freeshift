@@ -684,6 +684,15 @@ function wireUp() {
   element("save").addEventListener("click", save);
   element("revert").addEventListener("click", revert);
   element("swap").addEventListener("click", swap);
+  const settings = element("settings");
+  element("open-settings").addEventListener("click", () => settings.showModal());
+  element("settings-close").addEventListener("click", () => settings.close());
+  settings.addEventListener("click", (event) => {
+    if (event.target === settings) {
+      settings.close();
+    }
+  });
+  settings.addEventListener("close", () => element("open-settings").focus());
   const editor = element("editor");
   element("editor-close").addEventListener("click", () => editor.close());
   editor.addEventListener("close", closeEditor);

@@ -85,6 +85,13 @@ h2 {
   font-weight: 600;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-inline-size: 0;
+}
+
 .pill {
   margin: 0;
   padding: 4px 12px;
@@ -92,7 +99,7 @@ h2 {
   background: var(--idle);
   color: var(--text);
   font-size: 12px;
-  max-inline-size: 60%;
+  max-inline-size: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -554,6 +561,8 @@ button.link {
 .editor-dialog {
   inline-size: min(560px, calc(100vw - 32px));
   max-block-size: calc(100vh - 64px);
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -568,6 +577,21 @@ button.link {
 
 .editor-body {
   padding: 20px;
+}
+
+.settings-dialog {
+  inline-size: min(420px, calc(100vw - 32px));
+}
+
+#open-settings {
+  flex-shrink: 0;
+  inline-size: 36px;
+  block-size: 36px;
+}
+
+#open-settings svg {
+  inline-size: 20px;
+  block-size: 20px;
 }
 
 .editor-head {
@@ -599,6 +623,7 @@ button.link {
 .icon-button svg {
   inline-size: 16px;
   block-size: 16px;
+  flex-shrink: 0;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;

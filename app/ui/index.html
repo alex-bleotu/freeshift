@@ -12,7 +12,12 @@
         <img src="icon.png" alt="" aria-hidden="true" width="32" height="32" />
         <h1>FreeShift</h1>
       </div>
-      <p id="output-status" class="pill" role="status">Starting</p>
+      <div class="topbar-actions">
+        <p id="output-status" class="pill" role="status">Starting</p>
+        <button id="open-settings" type="button" class="icon-button" aria-label="Settings" aria-haspopup="dialog" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
+        </button>
+      </div>
     </header>
 
     <main class="page">
@@ -92,12 +97,6 @@
           <label class="inline">Double tap window (ms) <input id="double-tap" type="number" min="150" max="800" /></label>
         </section>
 
-        <section class="card" aria-labelledby="general-title">
-          <h2 id="general-title">General</h2>
-          <label class="switch"><input id="autostart" type="checkbox" /> <span>Start with Windows (in the tray)</span></label>
-          <label class="switch"><input id="zwift-enabled" type="checkbox" /> <span>Connect Zwift controllers</span></label>
-          <p class="muted small flush">Settings file: <code id="config-path"></code></p>
-        </section>
       </div>
 
       <section class="card log-card" aria-labelledby="log-title">
@@ -118,6 +117,20 @@
           </button>
         </div>
         <div id="editor-groups"></div>
+      </div>
+    </dialog>
+
+    <dialog id="settings" class="editor-dialog settings-dialog" aria-labelledby="settings-title">
+      <div class="editor-body">
+        <div class="editor-head">
+          <h3 id="settings-title">Settings</h3>
+          <button id="settings-close" type="button" class="icon-button" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <label class="switch"><input id="autostart" type="checkbox" /> <span>Start with Windows (in the tray)</span></label>
+        <label class="switch"><input id="zwift-enabled" type="checkbox" /> <span>Connect Zwift controllers</span></label>
+        <p class="muted small flush">Settings file: <code id="config-path"></code></p>
       </div>
     </dialog>
 
