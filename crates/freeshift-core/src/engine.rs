@@ -65,8 +65,13 @@ pub fn spawn_output(
             }
             let hold = Duration::from_millis(config.key_hold_ms);
             let prefix = config.focus_window_prefix.clone();
+            let target = if prefix.trim().is_empty() { "the active window".to_string() } else { format!("the \"{prefix}\" window") };
+            let description = format!(
+                "Keyboard output: {} shifts up, {} shifts down, sent to {target}",
+                config.shift_up_key, config.shift_down_key
+            );
             tokio::spawn(async move {
-                if let Err(error) = keyboard::run(keys, hold, prefix, receiver, events, stop).await {
+                if let Err(error) = keyboard::run(keys, hold, prefix, description, receiver, events, stop).await {
                     let _ = report.send(EngineEvent::Log { message: format!("Keyboard output stopped: {error:#}") });
                 }
             })

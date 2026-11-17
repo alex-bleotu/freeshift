@@ -129,13 +129,12 @@ pub async fn run(
     keys: HashMap<Action, Key>,
     hold: Duration,
     focus_prefix: String,
+    description: String,
     mut actions: mpsc::UnboundedReceiver<(Action, bool)>,
     events: broadcast::Sender<EngineEvent>,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    let _ = events.send(EngineEvent::OutputReady {
-        description: format!("Keyboard: {} key presses into \"{focus_prefix}\"", keys.len()),
-    });
+    let _ = events.send(EngineEvent::OutputReady { description });
     let mut pressed_at: HashMap<Action, Instant> = HashMap::new();
     let mut warned_focus = false;
     loop {
