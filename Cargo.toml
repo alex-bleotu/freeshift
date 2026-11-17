@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/freeshift-core", "crates/freeshift-cli"]
+members = ["crates/freeshift-core", "crates/freeshift-cli", "app/src-tauri"]
 
 [profile.release]
 lto = true

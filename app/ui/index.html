@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FreeShift</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <img src="icon.png" alt="" aria-hidden="true" width="32" height="32" />
+        <h1>FreeShift</h1>
+      </div>
+      <p id="output-status" class="pill" role="status">Starting</p>
+    </header>
+
+    <main class="grid">
+      <section class="card shift-card" aria-labelledby="shift-title">
+        <h2 id="shift-title">Shifting</h2>
+        <div class="shift-indicator">
+          <div id="shift-up" class="shift-arrow" aria-label="Shift up">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 15l7-7 7 7" /></svg>
+            <span>Up</span>
+            <strong id="count-up">0</strong>
+          </div>
+          <div id="shift-down" class="shift-arrow" aria-label="Shift down">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9l7 7 7-7" /></svg>
+            <span>Down</span>
+            <strong id="count-down">0</strong>
+          </div>
+        </div>
+        <p id="last-button" class="muted" aria-live="polite">Press a button on your controller</p>
+      </section>
+
+      <section class="card" aria-labelledby="devices-title">
+        <h2 id="devices-title">Controllers</h2>
+        <ul id="devices" class="device-list"></ul>
+        <p id="devices-empty" class="muted">No controller connected. Press a button on your Zwift Click to wake it; FreeShift connects on its own. Do not pair it in Windows Bluetooth settings.</p>
+      </section>
+
+      <section class="card" aria-labelledby="mapping-title">
+        <div class="card-head">
+          <h2 id="mapping-title">Buttons</h2>
+          <button id="swap" class="secondary" type="button">Swap up / down</button>
+        </div>
+        <table class="mapping">
+          <thead>
+            <tr><th scope="col">Button</th><th scope="col">Action</th></tr>
+          </thead>
+          <tbody id="mapping"></tbody>
+        </table>
+      </section>
+
+      <section class="card" aria-labelledby="output-title">
+        <h2 id="output-title">Output to MyWhoosh</h2>
+        <fieldset class="segmented">
+          <legend class="visually-hidden">Output mode</legend>
+          <label><input type="radio" name="output" value="OpenBikeControl" /> <span>Network (recommended)</span></label>
+          <label><input type="radio" name="output" value="Keyboard" /> <span>Keyboard keys</span></label>
+        </fieldset>
+        <div id="obc-fields" class="fields">
+          <p class="muted">MyWhoosh finds FreeShift on your local network as an OpenBikeControl controller. Pick "<span id="obc-name-hint">FreeShift</span>" in MyWhoosh's controller pairing screen. If Windows asks about network access, allow it on private networks.</p>
+          <label>Controller name <input id="controller-name" type="text" maxlength="40" /></label>
+          <label>TCP port <input id="obc-port" type="number" min="1024" max="65535" /></label>
+        </div>
+        <div id="keyboard-fields" class="fields">
+          <p class="muted">FreeShift brings the MyWhoosh window to the front and presses the key. MyWhoosh uses I and K; if gears move the wrong way, use Swap up / down.</p>
+          <div class="row">
+            <label>Shift up key <input id="shift-up-key" type="text" maxlength="10" /></label>
+            <label>Shift down key <input id="shift-down-key" type="text" maxlength="10" /></label>
+          </div>
+          <div class="row">
+            <label>Window title starts with <input id="focus-window" type="text" maxlength="60" /></label>
+            <label>Key hold (ms) <input id="key-hold" type="number" min="10" max="500" /></label>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="triggers-title">
+        <h2 id="triggers-title">Other Bluetooth buttons (SRAM AXS)</h2>
+        <p class="muted">For a device that only reports "a button was pressed": one tap and a double tap become two buttons. Find the characteristic with <code>freeshift-cli explore SRAM</code>.</p>
+        <ul id="triggers" class="trigger-list"></ul>
+        <form id="trigger-form" class="row trigger-form">
+          <label>Name starts with <input id="trigger-name" type="text" placeholder="SRAM" required /></label>
+          <label>Characteristic UUID <input id="trigger-uuid" type="text" placeholder="0000xxxx-0000-1000-8000-00805f9b34fb" required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" /></label>
+          <button type="submit" class="secondary">Add</button>
+        </form>
+        <label class="inline">Double tap window (ms) <input id="double-tap" type="number" min="150" max="800" /></label>
+      </section>
+
+      <section class="card" aria-labelledby="general-title">
+        <h2 id="general-title">General</h2>
+        <label class="switch"><input id="autostart" type="checkbox" /> <span>Start with Windows (in the tray)</span></label>
+        <label class="switch"><input id="zwift-enabled" type="checkbox" /> <span>Connect Zwift controllers</span></label>
+        <p class="muted small">Settings file: <code id="config-path"></code></p>
+      </section>
+
+      <section class="card log-card" aria-labelledby="log-title">
+        <h2 id="log-title">Activity</h2>
+        <ol id="log" class="log" aria-live="polite"></ol>
+      </section>
+    </main>
+
+    <div id="save-bar" class="save-bar" hidden>
+      <span>Unsaved changes</span>
+      <button id="revert" type="button" class="secondary">Revert</button>
+      <button id="save" type="button">Save and restart</button>
+    </div>
+
+    <footer class="footer">
+      FreeShift 0.1.0 · MIT License · Not affiliated with Zwift, SRAM or MyWhoosh. Protocol notes from ClickTamer and zwiftboard (MIT) and the OpenBikeControl specification (MIT).
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>
