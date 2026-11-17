@@ -71,8 +71,8 @@ async fn run(arguments: Vec<String>) -> Result<()> {
                 }
             }
             update_config(|config| {
-                config.shift_up_key = up.to_string();
-                config.shift_down_key = down.to_string();
+                config.keys.insert(Action::ShiftUp, up.to_string());
+                config.keys.insert(Action::ShiftDown, down.to_string());
             })
         }
         "trigger" => {
@@ -114,22 +114,18 @@ fn print_event(event: &EngineEvent) {
         }
         EngineEvent::Action { action, pressed } => {
             if *pressed {
-                println!("> {}", action_label(*action));
+                println!("> {}", action.label());
             }
+        }
+        EngineEvent::TrainerApp { peer, app, version, supported } => {
+            let names: Vec<&str> = supported.iter().map(|action| action.label()).collect();
+            println!("  {peer} is {app} {version}, supports: {}", names.join(", "));
         }
         EngineEvent::OutputClient { peer, connected } => {
             println!("{} trainer app {peer}", if *connected { "+ connected" } else { "- disconnected" });
         }
         EngineEvent::OutputReady { description } => println!("  output ready: {description}"),
         EngineEvent::Notification { device, characteristic, hex } => println!("  {device} {characteristic}: {hex}"),
-    }
-}
-
-fn action_label(action: Action) -> &'static str {
-    match action {
-        Action::ShiftUp => "SHIFT UP",
-        Action::ShiftDown => "SHIFT DOWN",
-        Action::None => "none",
     }
 }
 
@@ -218,7 +214,7 @@ async fn obc_test() -> Result<()> {
                 continue;
             }
         };
-        println!("> {}", action_label(action));
+        println!("> {}", action.label());
         let _ = actions.send((action, true));
         tokio::time::sleep(Duration::from_millis(60)).await;
         let _ = actions.send((action, false));

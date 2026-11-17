@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Mutex;
 
 use freeshift_core::engine::{self, EngineHandle};
-use freeshift_core::{Config, EngineEvent};
+use freeshift_core::{Action, Config, EngineEvent};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -24,10 +24,27 @@ struct DeviceInfo {
     battery: Option<u8>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrainerAppInfo {
+    peer: String,
+    app: String,
+    version: String,
+    supported: Vec<Action>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActionInfo {
+    id: Action,
+    label: &'static str,
+}
+
 #[derive(Default)]
 struct Status {
     devices: BTreeMap<String, DeviceInfo>,
     clients: Vec<String>,
+    trainer_apps: BTreeMap<String, TrainerAppInfo>,
     output: String,
     log: VecDeque<String>,
 }
@@ -71,7 +88,20 @@ impl Status {
                     self.clients.push(peer.clone());
                 } else {
                     self.clients.retain(|client| client != peer);
+                    self.trainer_apps.remove(peer);
                 }
+            }
+            EngineEvent::TrainerApp { peer, app, version, supported } => {
+                self.push_log(format!("{peer} is {app} {version}"));
+                self.trainer_apps.insert(
+                    peer.clone(),
+                    TrainerAppInfo {
+                        peer: peer.clone(),
+                        app: app.clone(),
+                        version: version.clone(),
+                        supported: supported.clone(),
+                    },
+                );
             }
             EngineEvent::OutputReady { description } => {
                 self.push_log(description.clone());
@@ -97,6 +127,8 @@ struct Snapshot {
     config: Config,
     devices: Vec<DeviceInfo>,
     clients: Vec<String>,
+    trainer_apps: Vec<TrainerAppInfo>,
+    actions: Vec<ActionInfo>,
     output: String,
     log: Vec<String>,
     autostart: bool,
@@ -116,6 +148,8 @@ fn get_snapshot(app: AppHandle, shared: State<'_, Shared>) -> Result<Snapshot, S
         config,
         devices: status.devices.values().cloned().collect(),
         clients: status.clients.clone(),
+        trainer_apps: status.trainer_apps.values().cloned().collect(),
+        actions: Action::ALL.iter().map(|action| ActionInfo { id: *action, label: action.label() }).collect(),
         output: status.output.clone(),
         log: status.log.iter().cloned().collect(),
         autostart: app.autolaunch().is_enabled().unwrap_or(false),
@@ -155,6 +189,7 @@ async fn restart(app: &AppHandle, shared: &Shared, config: Config) {
     if let Ok(mut status) = shared.status.lock() {
         status.devices.clear();
         status.clients.clear();
+        status.trainer_apps.clear();
         status.output.clear();
     }
     *engine = Some(engine::start(config, shared.events.clone()));
