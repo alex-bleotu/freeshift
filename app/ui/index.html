@@ -24,8 +24,11 @@
       <section class="card controller-card" aria-labelledby="controller-title">
         <div class="card-head">
           <div>
-            <h2 id="controller-title">Controller</h2>
-            <p class="muted small flush">Press a button to see it light up. Click a button to choose what it does.</p>
+            <div class="title-row tight">
+              <h2 id="controller-title">Controller</h2>
+              <button type="button" class="info-button" popovertarget="info-controller" aria-label="About the controller">i</button>
+            </div>
+            <p class="muted small flush">Click a button to change what it does.</p>
           </div>
           <button id="swap" class="secondary" type="button">Swap shift up / down</button>
         </div>
@@ -51,33 +54,38 @@
         </section>
 
         <section class="card" aria-labelledby="devices-title">
-          <h2 id="devices-title">Connected</h2>
+          <div class="title-row">
+            <h2 id="devices-title">Connected</h2>
+            <button type="button" class="info-button" popovertarget="info-devices" aria-label="About connecting">i</button>
+          </div>
           <ul id="devices" class="device-list"></ul>
-          <p id="devices-empty" class="muted flush">No controller connected. Press a button on your Zwift Click to wake it; FreeShift connects on its own. Do not pair it in Windows Bluetooth settings.</p>
+          <p id="devices-empty" class="muted flush">No controller yet. Press a button on your Click.</p>
           <ul id="apps" class="device-list app-list"></ul>
         </section>
 
         <section class="card" aria-labelledby="output-title">
-          <h2 id="output-title">Output to MyWhoosh</h2>
+          <div class="title-row">
+            <h2 id="output-title">Output to MyWhoosh</h2>
+            <button type="button" class="info-button" popovertarget="info-output" aria-label="About the output to MyWhoosh">i</button>
+          </div>
           <fieldset class="segmented">
             <legend class="visually-hidden">Output mode</legend>
             <label><input type="radio" name="output" value="OpenBikeControl" /> <span>Network (recommended)</span></label>
             <label><input type="radio" name="output" value="Keyboard" /> <span>Keyboard keys</span></label>
           </fieldset>
           <div id="obc-fields" class="fields">
-            <p class="muted">MyWhoosh finds FreeShift on your local network as an OpenBikeControl controller. Pick "<span id="obc-name-hint">FreeShift</span>" in MyWhoosh's controller pairing screen. If Windows asks about network access, allow it on private networks.</p>
+            <p class="muted">In MyWhoosh: Connection → OpenBikeControl icon → "<span id="obc-name-hint">FreeShift</span>".</p>
             <label>Controller name <input id="controller-name" type="text" maxlength="40" /></label>
             <label>TCP port <input id="obc-port" type="number" min="1024" max="65535" /></label>
           </div>
           <div id="keyboard-fields" class="fields">
-            <p class="muted">FreeShift brings the MyWhoosh window to the front and presses the key set for each action. MyWhoosh shifts with I and K; if gears move the wrong way, use Swap shift up / down.</p>
+            <p class="muted">Presses these keys in the MyWhoosh window.</p>
             <table class="keys">
               <thead>
                 <tr><th scope="col">Action</th><th scope="col">Key</th></tr>
               </thead>
               <tbody id="keys"></tbody>
             </table>
-            <p class="muted small">Keys: a letter or digit, Up, Down, Left, Right, Enter, Escape, Space, Tab, PageUp, PageDown, Home, End or F1 to F12. Leave empty to send nothing.</p>
             <div class="row">
               <label>Window title starts with <input id="focus-window" type="text" maxlength="60" /></label>
               <label>Key hold (ms) <input id="key-hold" type="number" min="10" max="500" /></label>
@@ -86,8 +94,11 @@
         </section>
 
         <section class="card" aria-labelledby="triggers-title">
-          <h2 id="triggers-title">Other Bluetooth buttons</h2>
-          <p class="muted">For a device that only reports "a button was pressed": one tap and a double tap become the Tap and Double tap buttons above. Find the characteristic with <code>freeshift-cli explore</code>. SRAM AXS needs more than this; see the README.</p>
+          <div class="title-row">
+            <h2 id="triggers-title">Other Bluetooth buttons</h2>
+            <button type="button" class="info-button" popovertarget="info-triggers" aria-label="About other Bluetooth buttons">i</button>
+          </div>
+          <p class="muted">Tap and double tap from any Bluetooth button.</p>
           <ul id="triggers" class="trigger-list"></ul>
           <form id="trigger-form" class="row trigger-form">
             <label>Name starts with <input id="trigger-name" type="text" placeholder="SRAM" required /></label>
@@ -104,6 +115,29 @@
         <ol id="log" class="log" aria-live="polite"></ol>
       </section>
     </main>
+
+    <div id="info-controller" class="info-pop" popover>
+      <p>Buttons light up when you press them on the Click. Click one to choose its action: gears, menu navigation, steering, view or workout controls.</p>
+      <p>Swap shift up / down flips only the gear actions.</p>
+    </div>
+
+    <div id="info-devices" class="info-pop" popover>
+      <p>FreeShift connects to a Zwift Click by itself. Don't pair it in Windows Bluetooth settings.</p>
+      <p>A Click talks to one app at a time, so close BikeControl, Zwift or Zwift Companion while using FreeShift.</p>
+      <p>The left pod of a Click v2 only works while Zwift has unlocked it in the last day; the right pod always works.</p>
+    </div>
+
+    <div id="info-output" class="info-pop" popover>
+      <p><strong>Network:</strong> MyWhoosh finds FreeShift on your local network as an OpenBikeControl controller. In MyWhoosh open Connection, tap the OpenBikeControl icon (top right), pick FreeShift and confirm.</p>
+      <p>On Windows, MyWhoosh needs Apple's Bonjour service; restart MyWhoosh if it was open before Bonjour started. If Windows asks about network access, allow private networks.</p>
+      <p><strong>Keyboard:</strong> FreeShift brings the window whose title starts with the text you set to the front and presses the key. MyWhoosh shifts with I and K. Keys: a letter or digit, Up, Down, Left, Right, Enter, Escape, Space, Tab, PageUp, PageDown, Home, End or F1 to F12. Leave a key empty to send nothing.</p>
+    </div>
+
+    <div id="info-triggers" class="info-pop" popover>
+      <p>For a Bluetooth device that only reports that something was pressed. One press is Tap, two quick presses are Double tap; set their actions on the controller above.</p>
+      <p>Find the device's characteristic with <code>freeshift-cli explore &lt;name&gt;</code>.</p>
+      <p>SRAM AXS needs more than this; see the README.</p>
+    </div>
 
     <dialog id="editor" class="editor-dialog" aria-labelledby="editor-title" aria-describedby="editor-current">
       <div class="editor-body">

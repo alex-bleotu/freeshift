@@ -703,6 +703,42 @@ function wireUp() {
   });
 }
 
+function placeInfo(popover) {
+  const trigger = document.querySelector(`[popovertarget="${popover.id}"]`);
+  if (!trigger) {
+    return;
+  }
+  const anchor = trigger.getBoundingClientRect();
+  const left = Math.min(Math.max(16, anchor.left - 16), innerWidth - popover.offsetWidth - 16);
+  const below = anchor.bottom + 8;
+  const isTooLow = below + popover.offsetHeight > innerHeight - 16;
+  const top = isTooLow ? Math.max(16, anchor.top - popover.offsetHeight - 8) : below;
+  popover.style.left = `${left}px`;
+  popover.style.top = `${top}px`;
+}
+
+function wireInfo() {
+  const popovers = document.querySelectorAll(".info-pop");
+  for (const popover of popovers) {
+    popover.addEventListener("toggle", (event) => {
+      if (event.newState === "open") {
+        placeInfo(popover);
+      }
+    });
+  }
+  globalThis.addEventListener(
+    "scroll",
+    () => {
+      for (const popover of popovers) {
+        if (popover.matches(":popover-open")) {
+          popover.hidePopover();
+        }
+      }
+    },
+    { passive: true },
+  );
+}
+
 async function showVersion() {
   try {
     element("version").textContent = await window.__TAURI__.app.getVersion();
@@ -713,6 +749,7 @@ async function showVersion() {
 
 async function start() {
   wireUp();
+  wireInfo();
   await listen("engine-event", (message) => handleEvent(message.payload));
   await listen("engine-restarted", () => {
     state.outputError = "";
