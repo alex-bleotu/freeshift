@@ -1,0 +1,17 @@
+[package]
+name = "freeshift-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+btleplug = "0.13.5"
+dirs = "7.0.0"
+futures = "0.3.34"
+mdns-sd = "0.22.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+socket2 = "0.6.5"
+tokio = { version = "1.54.1", features = ["full"] }
+uuid = "1.29.3"
+windows = { version = "0.62.2", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
