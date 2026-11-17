@@ -26,7 +26,12 @@ If Windows asks whether FreeShift may use the network, allow **private** network
 | Zwift Click v2, left pod | Works only while Zwift's own app has unlocked it in the last ~24 h |
 | Zwift Ride | Same keypad message as Click v2, untested |
 | Zwift Play | Not supported (encrypted) |
-| SRAM AXS or any other BLE button | "Custom trigger": any notification on one characteristic = tap, two quick ones = double tap |
+| SRAM AXS | Not supported yet, see below |
+| Any other BLE button | "Custom trigger": any notification on one characteristic = tap, two quick ones = double tap |
+
+### SRAM AXS
+
+Current SRAM AXS indoor shifting works by bonding an app to the rear derailleur (hold its AXS button until the light flashes) and switching the derailleur into a mode where shifter presses are reported to the app instead of moving the derailleur. That bonding uses an encrypted key exchange whose UUIDs, key parameters and message format are not public, so FreeShift cannot do it today. Adding it needs a capture of the Bluetooth traffic during that setup on your own drivetrain. The custom trigger above only helps if a shifter exposes a plain notification on a press without bonding, which `freeshift-cli explore SRAM` shows.
 
 Default mapping: Plus → Shift up, Minus → Shift down, B → Shift down (so a right-pod-only Click v2 has both directions), Tap → up, Double tap → down. Change any button in **Buttons**; **Swap up / down** flips every mapping.
 
