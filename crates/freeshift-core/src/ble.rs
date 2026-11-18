@@ -1,15 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::future::pending;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use btleplug::api::{
-    Central, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _, PeripheralProperties, ScanFilter,
-    WriteType,
+    Central, CentralEvent, CentralState, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
+    PeripheralProperties, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time::{Instant, interval, sleep, sleep_until, timeout};
 use uuid::Uuid;
@@ -27,6 +28,10 @@ const POST_RESET_GRACE: Duration = Duration::from_secs(15);
 const SEEN_WINDOW: Duration = Duration::from_secs(30);
 const DISCOVERY_ATTEMPTS: u32 = 4;
 const DISCOVERY_RETRY: Duration = Duration::from_millis(500);
+const SWEEP: Duration = Duration::from_secs(10);
+const QUIET_RESET: Duration = Duration::from_secs(30);
+const RESET_PAUSE: Duration = Duration::from_secs(1);
+const REOPEN_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
 pub enum RawInput {
@@ -176,41 +181,67 @@ impl Scanner {
     }
 }
 
-pub async fn run_scanner(
-    config: Config,
-    raw: mpsc::UnboundedSender<RawInput>,
-    events: broadcast::Sender<EngineEvent>,
-    mut stop: watch::Receiver<bool>,
-) -> Result<()> {
+type EventStream = Pin<Box<dyn Stream<Item = CentralEvent> + Send>>;
+
+enum Pass {
+    Stopped,
+    Reset { reason: &'static str, announce: bool },
+}
+
+async fn wait_or_stop(stop: &mut watch::Receiver<bool>, delay: Duration) -> bool {
+    tokio::select! {
+        _ = sleep(delay) => *stop.borrow(),
+        changed = stop.changed() => changed.is_err() || *stop.borrow(),
+    }
+}
+
+async fn open_scan() -> Result<(Adapter, EventStream)> {
     let adapter = first_adapter().await?;
-    let mut central_events = adapter.events().await.context("listening for Bluetooth events")?;
+    let central_events = adapter.events().await.context("listening for Bluetooth events")?;
     adapter
         .start_scan(ScanFilter::default())
         .await
         .context("starting Bluetooth scan; is Bluetooth turned on?")?;
-    let _ = events.send(EngineEvent::Log { message: "Scanning for controllers".to_string() });
+    Ok((adapter, central_events))
+}
 
-    let (done, mut finished) = mpsc::unbounded_channel();
-    let mut scanner = Scanner {
-        adapter: adapter.clone(),
-        config,
-        raw,
-        events,
-        stop: stop.clone(),
-        done,
-        active: HashSet::new(),
-        failing: HashMap::new(),
-        attempts: HashMap::new(),
-        seen: HashMap::new(),
-        connecting: Arc::new(Mutex::new(())),
-    };
-    let mut sweep = interval(Duration::from_secs(10));
+async fn open_until_ready(
+    events: &broadcast::Sender<EngineEvent>,
+    stop: &mut watch::Receiver<bool>,
+) -> Option<(Adapter, EventStream)> {
+    let mut reported = false;
+    loop {
+        match open_scan().await {
+            Ok(opened) => return Some(opened),
+            Err(error) => {
+                if !reported {
+                    reported = true;
+                    let _ = events.send(EngineEvent::Log {
+                        message: format!("Bluetooth: {error:#}. FreeShift keeps trying."),
+                    });
+                }
+                if wait_or_stop(stop, REOPEN_DELAY).await {
+                    return None;
+                }
+            }
+        }
+    }
+}
 
+async fn scan_pass(
+    scanner: &mut Scanner,
+    central_events: &mut EventStream,
+    finished: &mut mpsc::UnboundedReceiver<(PeripheralId, Option<String>)>,
+    stop: &mut watch::Receiver<bool>,
+) -> Pass {
+    let mut sweep = interval(SWEEP);
+    let mut last_heard = Instant::now();
+    let mut heard = false;
     loop {
         tokio::select! {
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
-                    break;
+                    return Pass::Stopped;
                 }
             }
             Some((id, failure)) = finished.recv() => {
@@ -229,22 +260,82 @@ pub async fn run_scanner(
                     Some(CentralEvent::DeviceDiscovered(id))
                     | Some(CentralEvent::DeviceUpdated(id))
                     | Some(CentralEvent::ManufacturerDataAdvertisement { id, .. }) => {
+                        last_heard = Instant::now();
+                        heard = true;
                         scanner.mark_seen(&id);
                         scanner.consider(id).await;
                     }
+                    Some(CentralEvent::StateUpdate(CentralState::PoweredOff)) => {
+                        let _ = scanner.events.send(EngineEvent::Log {
+                            message: "Bluetooth is off; FreeShift carries on when it is back".to_string(),
+                        });
+                    }
+                    Some(CentralEvent::StateUpdate(CentralState::PoweredOn)) => {
+                        return Pass::Reset { reason: "turned back on", announce: true };
+                    }
+                    None => {
+                        return Pass::Reset { reason: "stopped reporting", announce: true };
+                    }
                     Some(_) => {}
-                    None => break,
                 }
             }
             _ = sweep.tick() => {
+                if last_heard.elapsed() >= QUIET_RESET && scanner.connecting.try_lock().is_ok() {
+                    return Pass::Reset { reason: "went quiet", announce: heard };
+                }
                 for id in scanner.awake() {
                     scanner.consider(id).await;
                 }
             }
         }
     }
-    let _ = adapter.stop_scan().await;
-    Ok(())
+}
+
+pub async fn run_scanner(
+    config: Config,
+    raw: mpsc::UnboundedSender<RawInput>,
+    events: broadcast::Sender<EngineEvent>,
+    mut stop: watch::Receiver<bool>,
+) -> Result<()> {
+    let Some((adapter, mut central_events)) = open_until_ready(&events, &mut stop).await else {
+        return Ok(());
+    };
+    let _ = events.send(EngineEvent::Log { message: "Scanning for controllers".to_string() });
+
+    let (done, mut finished) = mpsc::unbounded_channel();
+    let mut scanner = Scanner {
+        adapter,
+        config,
+        raw,
+        events: events.clone(),
+        stop: stop.clone(),
+        done,
+        active: HashSet::new(),
+        failing: HashMap::new(),
+        attempts: HashMap::new(),
+        seen: HashMap::new(),
+        connecting: Arc::new(Mutex::new(())),
+    };
+
+    loop {
+        let pass = scan_pass(&mut scanner, &mut central_events, &mut finished, &mut stop).await;
+        let _ = scanner.adapter.stop_scan().await;
+        let Pass::Reset { reason, announce } = pass else {
+            return Ok(());
+        };
+        if wait_or_stop(&mut stop, RESET_PAUSE).await {
+            return Ok(());
+        }
+        let Some((adapter, stream)) = open_until_ready(&events, &mut stop).await else {
+            return Ok(());
+        };
+        scanner.adapter = adapter;
+        scanner.seen.clear();
+        central_events = stream;
+        if announce {
+            let _ = events.send(EngineEvent::Log { message: format!("Bluetooth {reason}; scanning for controllers again") });
+        }
+    }
 }
 
 pub async fn write(peripheral: &Peripheral, characteristic: &Characteristic, bytes: &[u8]) -> Result<()> {
