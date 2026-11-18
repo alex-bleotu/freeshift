@@ -3,6 +3,7 @@ pub mod config;
 pub mod engine;
 pub mod explore;
 pub mod keyboard;
+mod link;
 pub mod model;
 pub mod obc;
 pub mod protobuf;

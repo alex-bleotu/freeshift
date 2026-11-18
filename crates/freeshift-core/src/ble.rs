@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::future::pending;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -9,11 +10,12 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::StreamExt;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time::{Instant, interval, sleep, sleep_until, timeout};
 use uuid::Uuid;
 
 use crate::config::{Config, CustomTrigger};
+use crate::link::Link;
 use crate::model::{Button, EngineEvent, hex};
 use crate::zwift::{self, Frame, ZwiftKind};
 
@@ -21,6 +23,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const RETRY_DELAY: Duration = Duration::from_secs(5);
 const KEEPALIVE: Duration = Duration::from_secs(3);
 const IDLE_RESET: Duration = Duration::from_secs(55);
+const POST_RESET_GRACE: Duration = Duration::from_secs(15);
+const SEEN_WINDOW: Duration = Duration::from_secs(30);
+const DISCOVERY_ATTEMPTS: u32 = 4;
+const DISCOVERY_RETRY: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum RawInput {
@@ -39,6 +45,10 @@ fn is_connect_error(text: &str) -> bool {
     ["connection failed", "connection timed out", "service discovery"]
         .iter()
         .any(|marker| text.contains(marker))
+}
+
+fn failure_key(text: &str) -> String {
+    if is_connect_error(text) { "connect".to_string() } else { text.to_string() }
 }
 
 pub async fn first_adapter() -> Result<Adapter> {
@@ -82,15 +92,36 @@ struct Scanner {
     raw: mpsc::UnboundedSender<RawInput>,
     events: broadcast::Sender<EngineEvent>,
     stop: watch::Receiver<bool>,
-    done: mpsc::UnboundedSender<(PeripheralId, bool)>,
+    done: mpsc::UnboundedSender<(PeripheralId, Option<String>)>,
     active: HashSet<PeripheralId>,
-    failing: HashSet<PeripheralId>,
+    failing: HashMap<PeripheralId, String>,
     attempts: HashMap<PeripheralId, Instant>,
+    seen: HashMap<PeripheralId, Instant>,
+    connecting: Arc<Mutex<()>>,
+}
+
+struct Access {
+    adapter: Adapter,
+    connecting: Arc<Mutex<()>>,
+    stop: watch::Receiver<bool>,
+}
+
+fn is_recent(seen: &HashMap<PeripheralId, Instant>, id: &PeripheralId) -> bool {
+    seen.get(id).is_some_and(|at| at.elapsed() < SEEN_WINDOW)
 }
 
 impl Scanner {
+    fn mark_seen(&mut self, id: &PeripheralId) {
+        self.seen.insert(id.clone(), Instant::now());
+    }
+
+    fn awake(&mut self) -> Vec<PeripheralId> {
+        self.seen.retain(|_, at| at.elapsed() < SEEN_WINDOW);
+        self.seen.keys().cloned().collect()
+    }
+
     async fn consider(&mut self, id: PeripheralId) {
-        if self.active.contains(&id) {
+        if self.active.contains(&id) || !is_recent(&self.seen, &id) {
             return;
         }
         if self.attempts.get(&id).is_some_and(|at| at.elapsed() < RETRY_DELAY) {
@@ -113,27 +144,34 @@ impl Scanner {
         let stop = self.stop.clone();
         let done = self.done.clone();
         let window = Duration::from_millis(self.config.double_tap_ms);
-        let is_repeat_failure = self.failing.contains(&id);
+        let previous_failure = self.failing.get(&id).cloned();
+        let access = Access {
+            adapter: self.adapter.clone(),
+            connecting: self.connecting.clone(),
+            stop: self.stop.clone(),
+        };
         tokio::spawn(async move {
             let label = if name.is_empty() { peripheral.address().to_string() } else { name.clone() };
             let result = match target {
-                Target::Zwift(kind) => zwift_session(&peripheral, kind, &label, &raw, &events, stop).await,
-                Target::Custom(trigger) => trigger_session(&peripheral, &trigger, &label, window, &raw, &events, stop).await,
+                Target::Zwift(kind) => zwift_session(&peripheral, kind, &label, &access, &raw, &events, stop).await,
+                Target::Custom(trigger) => {
+                    trigger_session(&peripheral, &trigger, &label, window, &access, &raw, &events, stop).await
+                }
             };
-            let mut is_connect_failure = false;
-            if let Err(error) = result {
-                let text = format!("{error:#}");
-                is_connect_failure = is_connect_error(&text);
-                if !is_connect_failure {
-                    let _ = events.send(EngineEvent::Log { message: format!("{label}: {text}") });
-                } else if !is_repeat_failure {
-                    let _ = events.send(EngineEvent::Log {
-                        message: format!("{label}: can't connect right now ({text}). Press a button on it to wake it; FreeShift keeps trying quietly."),
-                    });
+            let failure = result.err().map(|error| format!("{error:#}"));
+            if let Some(text) = &failure {
+                let key = failure_key(text);
+                if previous_failure.as_deref() != Some(key.as_str()) {
+                    let message = if is_connect_error(text) {
+                        format!("{label}: can't connect right now ({text}). Press a button on it to wake it; FreeShift keeps trying quietly.")
+                    } else {
+                        format!("{label}: {text}")
+                    };
+                    let _ = events.send(EngineEvent::Log { message });
                 }
             }
             let _ = peripheral.disconnect().await;
-            let _ = done.send((id, is_connect_failure));
+            let _ = done.send((id, failure.as_deref().map(failure_key)));
         });
     }
 }
@@ -161,8 +199,10 @@ pub async fn run_scanner(
         stop: stop.clone(),
         done,
         active: HashSet::new(),
-        failing: HashSet::new(),
+        failing: HashMap::new(),
         attempts: HashMap::new(),
+        seen: HashMap::new(),
+        connecting: Arc::new(Mutex::new(())),
     };
     let mut sweep = interval(Duration::from_secs(10));
 
@@ -173,28 +213,32 @@ pub async fn run_scanner(
                     break;
                 }
             }
-            Some((id, is_connect_failure)) = finished.recv() => {
+            Some((id, failure)) = finished.recv() => {
                 scanner.active.remove(&id);
-                if is_connect_failure {
-                    scanner.failing.insert(id);
-                } else {
-                    scanner.failing.remove(&id);
+                match failure {
+                    Some(key) => {
+                        scanner.failing.insert(id, key);
+                    }
+                    None => {
+                        scanner.failing.remove(&id);
+                    }
                 }
             }
             event = central_events.next() => {
                 match event {
                     Some(CentralEvent::DeviceDiscovered(id))
                     | Some(CentralEvent::DeviceUpdated(id))
-                    | Some(CentralEvent::ManufacturerDataAdvertisement { id, .. }) => scanner.consider(id).await,
+                    | Some(CentralEvent::ManufacturerDataAdvertisement { id, .. }) => {
+                        scanner.mark_seen(&id);
+                        scanner.consider(id).await;
+                    }
                     Some(_) => {}
                     None => break,
                 }
             }
             _ = sweep.tick() => {
-                if let Ok(peripherals) = adapter.peripherals().await {
-                    for peripheral in peripherals {
-                        scanner.consider(peripheral.id()).await;
-                    }
+                for id in scanner.awake() {
+                    scanner.consider(id).await;
                 }
             }
         }
@@ -228,18 +272,63 @@ fn find(peripheral: &Peripheral, uuid: Uuid) -> Option<Characteristic> {
     peripheral.characteristics().into_iter().find(|characteristic| characteristic.uuid == uuid)
 }
 
+async fn connect_for(
+    peripheral: &Peripheral,
+    access: &Access,
+    required: Uuid,
+) -> Result<(Link, Option<Characteristic>)> {
+    let _turn = access.connecting.lock().await;
+    let _ = access.adapter.stop_scan().await;
+    let result = open_and_discover(peripheral, required).await;
+    if !*access.stop.borrow() {
+        let _ = access.adapter.start_scan(ScanFilter::default()).await;
+    }
+    result
+}
+
+async fn open_and_discover(peripheral: &Peripheral, required: Uuid) -> Result<(Link, Option<Characteristic>)> {
+    let link = Link::open(peripheral.address(), CONNECT_TIMEOUT)
+        .await
+        .context("connection failed")?;
+    connect(peripheral).await?;
+    for attempt in 1..=DISCOVERY_ATTEMPTS {
+        if let Some(characteristic) = find(peripheral, required) {
+            return Ok((link, Some(characteristic)));
+        }
+        if attempt == DISCOVERY_ATTEMPTS {
+            break;
+        }
+        sleep(DISCOVERY_RETRY).await;
+        timeout(CONNECT_TIMEOUT, peripheral.discover_services())
+            .await
+            .context("service discovery timed out")?
+            .context("service discovery failed")?;
+    }
+    Ok((link, None))
+}
+
+fn post_reset_silent(reset_at: Option<Instant>, last_activity: Instant) -> bool {
+    reset_at.is_some_and(|at| at.elapsed() >= POST_RESET_GRACE && last_activity < at)
+}
+
 async fn zwift_session(
     peripheral: &Peripheral,
     kind: ZwiftKind,
     label: &str,
+    access: &Access,
     raw: &mpsc::UnboundedSender<RawInput>,
     events: &broadcast::Sender<EngineEvent>,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
     let device = peripheral.address().to_string();
-    connect(peripheral).await?;
-    let async_characteristic = find(peripheral, zwift::ASYNC)
-        .context("Zwift service not found; update the controller firmware in Zwift Companion")?;
+    let missing_service = match kind {
+        ZwiftKind::ClickV2Left => {
+            "Zwift service hidden: this left Click v2 pod is locked to Zwift. The right pod works without it"
+        }
+        _ => "Zwift service not found; the controller may be locked to Zwift or need a firmware update in Zwift Companion",
+    };
+    let (_link, async_characteristic) = connect_for(peripheral, access, zwift::ASYNC).await?;
+    let async_characteristic = async_characteristic.context(missing_service)?;
     let sync_rx = find(peripheral, zwift::SYNC_RX).context("Zwift command characteristic not found")?;
     let sync_tx = find(peripheral, zwift::SYNC_TX);
 
@@ -271,7 +360,7 @@ async fn zwift_session(
     let mut keepalive = interval(KEEPALIVE);
     keepalive.tick().await;
     let mut last_activity = Instant::now();
-    let mut reset_sent = false;
+    let mut reset_at: Option<Instant> = None;
     let mut unlocked = false;
 
     let outcome = loop {
@@ -313,12 +402,15 @@ async fn zwift_session(
                     }
                     continue;
                 }
-                if !reset_sent && last_activity.elapsed() >= IDLE_RESET {
-                    reset_sent = true;
+                if reset_at.is_none() && last_activity.elapsed() >= IDLE_RESET {
+                    reset_at = Some(Instant::now());
                     if write(peripheral, &sync_rx, &zwift::POD_RESET).await.is_err() {
                         break Err(anyhow!("connection lost"));
                     }
                     continue;
+                }
+                if post_reset_silent(reset_at, last_activity) {
+                    break Ok(());
                 }
                 if write(peripheral, &sync_rx, &zwift::RIDE_ON).await.is_err() {
                     break Err(anyhow!("connection lost"));
@@ -337,14 +429,15 @@ async fn trigger_session(
     trigger: &CustomTrigger,
     label: &str,
     window: Duration,
+    access: &Access,
     raw: &mpsc::UnboundedSender<RawInput>,
     events: &broadcast::Sender<EngineEvent>,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
     let device = peripheral.address().to_string();
     let uuid = Uuid::parse_str(trigger.characteristic.trim()).context("trigger characteristic is not a valid UUID")?;
-    connect(peripheral).await?;
-    let characteristic = find(peripheral, uuid).with_context(|| format!("characteristic {uuid} not found"))?;
+    let (_link, characteristic) = connect_for(peripheral, access, uuid).await?;
+    let characteristic = characteristic.with_context(|| format!("characteristic {uuid} not found"))?;
     let mut notifications = peripheral.notifications().await.context("opening notification stream")?;
     peripheral.subscribe(&characteristic).await.context("subscribing to trigger")?;
     let _ = events.send(EngineEvent::DeviceConnected {
@@ -418,5 +511,23 @@ mod tests {
         assert!(is_connect_error("service discovery timed out: deadline has elapsed"));
         assert!(!is_connect_error("connection lost"));
         assert!(!is_connect_error("another app took over the controller"));
+    }
+
+    #[test]
+    fn groups_connect_errors_under_one_key() {
+        assert_eq!(failure_key("connection failed: Not connected"), "connect");
+        assert_eq!(failure_key("connection timed out: deadline has elapsed"), "connect");
+        assert_eq!(failure_key("connection lost"), "connection lost");
+    }
+
+    #[test]
+    fn recycles_a_session_only_when_silent_after_its_reset() {
+        let now = Instant::now();
+        let long_ago = now - Duration::from_secs(60);
+        let reset = now - POST_RESET_GRACE - Duration::from_secs(1);
+        assert!(!post_reset_silent(None, long_ago));
+        assert!(post_reset_silent(Some(reset), long_ago));
+        assert!(!post_reset_silent(Some(reset), now));
+        assert!(!post_reset_silent(Some(now), long_ago));
     }
 }
