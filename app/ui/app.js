@@ -6,22 +6,22 @@ const PODS = [
     id: "left",
     title: "Left pod",
     buttons: [
-      { button: "Up", glyph: "▲", name: "Up", x: 50, y: 19 },
-      { button: "Left", glyph: "◀", name: "Left", x: 25, y: 40 },
-      { button: "Right", glyph: "▶", name: "Right", x: 75, y: 40 },
-      { button: "Down", glyph: "▼", name: "Down", x: 50, y: 61 },
-      { button: "Minus", glyph: "−", name: "Minus (shift)", shape: "paddle", x: 50, y: 86 },
+      { button: "Up", glyph: "▲", name: "Up", kind: "arrow", turn: 0, x: 50, y: 25.4 },
+      { button: "Left", glyph: "◀", name: "Left", kind: "arrow", turn: -90, x: 32.2, y: 42 },
+      { button: "Right", glyph: "▶", name: "Right", kind: "arrow", turn: 90, x: 67.8, y: 42 },
+      { button: "Down", glyph: "▼", name: "Down", kind: "arrow", turn: 180, x: 50, y: 58.6 },
+      { button: "Minus", glyph: "−", name: "Minus (shift)", kind: "chin", x: 50, y: 84 },
     ],
   },
   {
     id: "right",
     title: "Right pod",
     buttons: [
-      { button: "Y", glyph: "Y", name: "Y", x: 50, y: 19 },
-      { button: "Z", glyph: "Z", name: "Z", x: 25, y: 40 },
-      { button: "A", glyph: "A", name: "A", x: 75, y: 40 },
-      { button: "B", glyph: "B", name: "B", x: 50, y: 61 },
-      { button: "Plus", glyph: "+", name: "Plus (shift)", shape: "paddle", x: 50, y: 86 },
+      { button: "Y", glyph: "Y", name: "Y", kind: "face", color: "#1fa9c9", x: 50, y: 25.4 },
+      { button: "Z", glyph: "Z", name: "Z", kind: "face", color: "#ec6a2c", x: 32.2, y: 42 },
+      { button: "A", glyph: "A", name: "A", kind: "face", color: "#2eaa4f", x: 67.8, y: 42 },
+      { button: "B", glyph: "B", name: "B", kind: "face", color: "#d8318f", x: 50, y: 58.6 },
+      { button: "Plus", glyph: "+", name: "Plus (shift)", kind: "chin", x: 50, y: 84 },
     ],
   },
   {
@@ -59,8 +59,6 @@ const state = {
   output: "",
   outputError: "",
   selected: null,
-  lastButton: "",
-  counts: { ShiftUp: 0, ShiftDown: 0 },
 };
 
 const element = (id) => document.getElementById(id);
@@ -185,15 +183,43 @@ function renderDevices() {
   }
 }
 
+function createChevron(turn) {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.rotate = `${turn}deg`;
+  const path = document.createElementNS(namespace, "path");
+  path.setAttribute("d", "M6 15l6-6 6 6");
+  svg.append(path);
+
+  return svg;
+}
+
+function createPadContent(entry) {
+  if (entry.kind === "arrow") {
+    return createChevron(entry.turn);
+  }
+  const label = document.createElement("span");
+  label.className = "pad-label";
+  label.setAttribute("aria-hidden", "true");
+  label.textContent = entry.glyph;
+
+  return label;
+}
+
 function createPadButton(entry) {
   const action = state.draft.mapping[entry.button] || "None";
   const button = document.createElement("button");
   button.type = "button";
-  button.className = entry.shape === "paddle" ? "pad-button paddle" : "pad-button";
+  button.className = `pad-button ${entry.kind || "round"}`;
   button.dataset.button = entry.button;
   button.style.left = `${entry.x}%`;
   button.style.top = `${entry.y}%`;
-  button.textContent = entry.glyph;
+  if (entry.color) {
+    button.style.setProperty("--face", entry.color);
+  }
+  button.append(createPadContent(entry));
   button.setAttribute("aria-label", `${entry.name}: ${actionLabel(action)}. Change action`);
   button.setAttribute("aria-pressed", String(state.selected === entry.button));
   button.classList.toggle("unassigned", action === "None");
@@ -211,9 +237,12 @@ function createLegendRow(entry) {
   row.dataset.button = entry.button;
   row.setAttribute("aria-pressed", String(state.selected === entry.button));
   const glyph = document.createElement("span");
-  glyph.className = "glyph";
+  glyph.className = entry.color ? "glyph face" : "glyph";
   glyph.setAttribute("aria-hidden", "true");
   glyph.textContent = entry.glyph;
+  if (entry.color) {
+    glyph.style.setProperty("--face", entry.color);
+  }
   const name = document.createElement("span");
   name.className = "legend-name";
   name.textContent = entry.name;
@@ -228,6 +257,18 @@ function createLegendRow(entry) {
   return item;
 }
 
+function createShell() {
+  const parts = ["pod-tab nw", "pod-tab ne", "pod-tab sw", "pod-tab se", "pod-body", "pod-led", "pod-plate"];
+
+  return parts.map((className) => {
+    const part = document.createElement("div");
+    part.className = className;
+    part.setAttribute("aria-hidden", "true");
+
+    return part;
+  });
+}
+
 function renderPods() {
   const container = element("pods");
   container.replaceChildren();
@@ -239,7 +280,10 @@ function renderPods() {
     title.className = "pod-title";
     title.textContent = pod.title;
     const shape = document.createElement("div");
-    shape.className = pod.compact ? "pod pod-compact" : "pod";
+    shape.className = pod.compact ? "pod pod-compact" : `pod pod-${pod.id}`;
+    if (!pod.compact) {
+      shape.append(...createShell());
+    }
     for (const entry of pod.buttons) {
       shape.append(createPadButton(entry));
     }
@@ -454,12 +498,6 @@ function parseInteger(minimum, maximum) {
   };
 }
 
-function flashArrow(action) {
-  const arrow = element(action === "ShiftUp" ? "shift-up" : "shift-down");
-  arrow.classList.add("active");
-  setTimeout(() => arrow.classList.remove("active"), 220);
-}
-
 function markPressed(button, isPressed) {
   for (const node of document.querySelectorAll(`[data-button="${button}"]`)) {
     node.classList.toggle("down", isPressed);
@@ -498,24 +536,6 @@ function handleEvent(event) {
       break;
     case "button":
       markPressed(event.button, event.pressed);
-      if (event.pressed) {
-        state.lastButton = buttonInfo(event.button).name;
-        const action = state.draft.mapping[event.button] || "None";
-        if (action === "None") {
-          element("last-action").textContent = `${state.lastButton}: nothing assigned`;
-        }
-      }
-      break;
-    case "action":
-      if (event.pressed) {
-        element("last-action").textContent = `${actionLabel(event.action)}${state.lastButton ? ` (${state.lastButton})` : ""}`;
-        if (event.action in state.counts) {
-          state.counts[event.action] += 1;
-          element("count-up").textContent = state.counts.ShiftUp;
-          element("count-down").textContent = state.counts.ShiftDown;
-          flashArrow(event.action);
-        }
-      }
       break;
     case "outputClient":
       if (event.connected) {
@@ -628,6 +648,19 @@ async function swap() {
   }
 }
 
+async function restartEngine() {
+  const button = element("restart");
+  button.disabled = true;
+  try {
+    await invoke("restart_engine");
+    appendLog("Restarted FreeShift");
+  } catch (error) {
+    appendLog(`Restart failed: ${error}`);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function toggleAutostart(event) {
   const checkbox = event.target;
   try {
@@ -684,6 +717,7 @@ function wireUp() {
   element("save").addEventListener("click", save);
   element("revert").addEventListener("click", revert);
   element("swap").addEventListener("click", swap);
+  element("restart").addEventListener("click", restartEngine);
   const settings = element("settings");
   element("open-settings").addEventListener("click", () => settings.showModal());
   element("settings-close").addEventListener("click", () => settings.close());

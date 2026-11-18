@@ -174,6 +174,13 @@ async fn swap_directions(app: AppHandle, shared: State<'_, Shared>) -> Result<Co
 }
 
 #[tauri::command]
+async fn restart_engine(app: AppHandle, shared: State<'_, Shared>) -> Result<(), String> {
+    let config = Config::load().map_err(describe)?;
+    restart(&app, &shared, config).await;
+    Ok(())
+}
+
+#[tauri::command]
 fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let manager = app.autolaunch();
     let result = if enabled { manager.enable() } else { manager.disable() };
@@ -275,7 +282,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _arguments, _directory| show_main_window(app)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![MINIMIZED_FLAG])))
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![get_snapshot, save_config, swap_directions, set_autostart])
+        .invoke_handler(tauri::generate_handler![get_snapshot, restart_engine, save_config, set_autostart, swap_directions])
         .setup(move |app| {
             build_tray(app)?;
             let handle = app.handle().clone();
