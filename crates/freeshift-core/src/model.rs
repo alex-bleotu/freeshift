@@ -14,10 +14,14 @@ pub enum Button {
     Z,
     Tap,
     DoubleTap,
+    SramLeft,
+    SramLeftDouble,
+    SramRight,
+    SramRightDouble,
 }
 
 impl Button {
-    pub const ALL: [Button; 12] = [
+    pub const ALL: [Button; 16] = [
         Button::Plus,
         Button::Minus,
         Button::Left,
@@ -30,6 +34,10 @@ impl Button {
         Button::Z,
         Button::Tap,
         Button::DoubleTap,
+        Button::SramLeft,
+        Button::SramLeftDouble,
+        Button::SramRight,
+        Button::SramRightDouble,
     ];
 
     pub fn label(self) -> &'static str {
@@ -46,6 +54,10 @@ impl Button {
             Button::Z => "Z",
             Button::Tap => "Tap",
             Button::DoubleTap => "DoubleTap",
+            Button::SramLeft => "SramLeft",
+            Button::SramLeftDouble => "SramLeftDouble",
+            Button::SramRight => "SramRight",
+            Button::SramRightDouble => "SramRightDouble",
         }
     }
 }

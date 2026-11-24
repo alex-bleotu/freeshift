@@ -160,7 +160,7 @@ fn get_snapshot(app: AppHandle, shared: State<'_, Shared>) -> Result<Snapshot, S
 #[tauri::command]
 async fn save_config(app: AppHandle, config: Config, shared: State<'_, Shared>) -> Result<(), String> {
     config.save().map_err(describe)?;
-    restart(&app, &shared, config).await;
+    apply(&app, &shared, config).await;
     Ok(())
 }
 
@@ -169,7 +169,7 @@ async fn swap_directions(app: AppHandle, shared: State<'_, Shared>) -> Result<Co
     let mut config = Config::load().map_err(describe)?;
     config.swap_directions();
     config.save().map_err(describe)?;
-    restart(&app, &shared, config.clone()).await;
+    apply(&app, &shared, config.clone()).await;
     Ok(config)
 }
 
@@ -186,6 +186,17 @@ fn set_autostart(app: AppHandle, enabled: bool) -> Result<bool, String> {
     let result = if enabled { manager.enable() } else { manager.disable() };
     result.map_err(describe)?;
     manager.is_enabled().map_err(describe)
+}
+
+async fn apply(app: &AppHandle, shared: &Shared, config: Config) {
+    let is_applied = shared.engine.lock().await.as_ref().is_some_and(|handle| handle.apply(&config));
+    if is_applied {
+        let _ = shared.events.send(EngineEvent::Log {
+            message: "Settings applied; the controllers stay connected".to_string(),
+        });
+        return;
+    }
+    restart(app, shared, config).await;
 }
 
 async fn restart(app: &AppHandle, shared: &Shared, config: Config) {

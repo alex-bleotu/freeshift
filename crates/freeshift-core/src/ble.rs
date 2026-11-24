@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use btleplug::api::{
     Central, CentralEvent, CentralState, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
-    PeripheralProperties, ScanFilter, WriteType,
+    PeripheralProperties, ScanFilter, ValueNotification, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
@@ -17,7 +17,8 @@ use uuid::Uuid;
 
 use crate::config::{Config, CustomTrigger};
 use crate::link::Link;
-use crate::model::{Button, EngineEvent, hex};
+use crate::model::{Action, Button, EngineEvent, hex};
+use crate::sram::{self, Handshake, KeySource, KeyStore, Side};
 use crate::zwift::{self, Frame, ZwiftKind};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -32,6 +33,10 @@ const SWEEP: Duration = Duration::from_secs(10);
 const QUIET_RESET: Duration = Duration::from_secs(30);
 const RESET_PAUSE: Duration = Duration::from_secs(1);
 const REOPEN_DELAY: Duration = Duration::from_secs(5);
+const PAIR_RETRY: Duration = Duration::from_secs(4);
+const BOND_REPLY_WAIT: Duration = Duration::from_secs(3);
+const BOND_KEY_WAIT: Duration = Duration::from_secs(6);
+const SRAM_KIND: &str = "SRAM AXS rear derailleur";
 
 #[derive(Debug)]
 pub enum RawInput {
@@ -40,10 +45,33 @@ pub enum RawInput {
     Pulse { device: String, button: Button },
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SramDoubles {
+    left: bool,
+    right: bool,
+}
+
+impl SramDoubles {
+    fn from_config(config: &Config) -> SramDoubles {
+        SramDoubles {
+            left: config.action_for(Button::SramLeftDouble) != Action::None,
+            right: config.action_for(Button::SramRightDouble) != Action::None,
+        }
+    }
+
+    fn uses_double(self, side: Side) -> bool {
+        match side {
+            Side::Left => self.left,
+            Side::Right => self.right,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum Target {
     Zwift(ZwiftKind),
     Custom(CustomTrigger),
+    Sram,
 }
 
 fn is_connect_error(text: &str) -> bool {
@@ -82,6 +110,9 @@ fn classify(properties: &PeripheralProperties, config: &Config) -> Option<Target
     if let Some(trigger) = custom {
         return Some(Target::Custom(trigger.clone()));
     }
+    if sram::is_rear_derailleur(properties) {
+        return Some(Target::Sram);
+    }
     if !config.zwift_enabled {
         return None;
     }
@@ -93,7 +124,7 @@ fn classify(properties: &PeripheralProperties, config: &Config) -> Option<Target
 
 struct Scanner {
     adapter: Adapter,
-    config: Config,
+    settings: watch::Receiver<Config>,
     raw: mpsc::UnboundedSender<RawInput>,
     events: broadcast::Sender<EngineEvent>,
     stop: watch::Receiver<bool>,
@@ -138,7 +169,8 @@ impl Scanner {
         let Ok(Some(properties)) = peripheral.properties().await else {
             return;
         };
-        let Some(target) = classify(&properties, &self.config) else {
+        let target = classify(&properties, &self.settings.borrow());
+        let Some(target) = target else {
             return;
         };
         self.active.insert(id.clone());
@@ -148,7 +180,7 @@ impl Scanner {
         let events = self.events.clone();
         let stop = self.stop.clone();
         let done = self.done.clone();
-        let window = Duration::from_millis(self.config.double_tap_ms);
+        let settings = self.settings.clone();
         let previous_failure = self.failing.get(&id).cloned();
         let access = Access {
             adapter: self.adapter.clone(),
@@ -160,8 +192,9 @@ impl Scanner {
             let result = match target {
                 Target::Zwift(kind) => zwift_session(&peripheral, kind, &label, &access, &raw, &events, stop).await,
                 Target::Custom(trigger) => {
-                    trigger_session(&peripheral, &trigger, &label, window, &access, &raw, &events, stop).await
+                    trigger_session(&peripheral, &trigger, &label, &settings, &access, &raw, &events, stop).await
                 }
+                Target::Sram => sram_session(&peripheral, &label, &settings, &access, &raw, &events, stop).await,
             };
             let failure = result.err().map(|error| format!("{error:#}"));
             if let Some(text) = &failure {
@@ -292,7 +325,7 @@ async fn scan_pass(
 }
 
 pub async fn run_scanner(
-    config: Config,
+    settings: watch::Receiver<Config>,
     raw: mpsc::UnboundedSender<RawInput>,
     events: broadcast::Sender<EngineEvent>,
     mut stop: watch::Receiver<bool>,
@@ -305,7 +338,7 @@ pub async fn run_scanner(
     let (done, mut finished) = mpsc::unbounded_channel();
     let mut scanner = Scanner {
         adapter,
-        config,
+        settings,
         raw,
         events: events.clone(),
         stop: stop.clone(),
@@ -519,7 +552,7 @@ async fn trigger_session(
     peripheral: &Peripheral,
     trigger: &CustomTrigger,
     label: &str,
-    window: Duration,
+    settings: &watch::Receiver<Config>,
     access: &Access,
     raw: &mpsc::UnboundedSender<RawInput>,
     events: &broadcast::Sender<EngineEvent>,
@@ -572,7 +605,7 @@ async fn trigger_session(
                     deadline = None;
                     let _ = raw.send(RawInput::Pulse { device: device.clone(), button: Button::DoubleTap });
                 } else {
-                    deadline = Some(Instant::now() + window);
+                    deadline = Some(Instant::now() + settings.borrow().double_tap_window());
                 }
             }
             _ = wait => {
@@ -592,9 +625,308 @@ async fn trigger_session(
     outcome
 }
 
+type Notifications = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
+
+#[derive(Default)]
+struct PaddleClicks {
+    pending: [Option<Instant>; 2],
+}
+
+fn side_index(side: Side) -> usize {
+    match side {
+        Side::Left => 0,
+        Side::Right => 1,
+    }
+}
+
+fn paddle_button(side: Side, is_double: bool) -> Button {
+    match (side, is_double) {
+        (Side::Left, false) => Button::SramLeft,
+        (Side::Left, true) => Button::SramLeftDouble,
+        (Side::Right, false) => Button::SramRight,
+        (Side::Right, true) => Button::SramRightDouble,
+    }
+}
+
+impl PaddleClicks {
+    fn press(&mut self, side: Side, doubles: SramDoubles, now: Instant, window: Duration) -> Option<Button> {
+        if !doubles.uses_double(side) {
+            return Some(paddle_button(side, false));
+        }
+        let slot = &mut self.pending[side_index(side)];
+        if slot.take().is_some() {
+            return Some(paddle_button(side, true));
+        }
+        *slot = Some(now + window);
+        None
+    }
+
+    fn expired(&mut self, now: Instant) -> Vec<Button> {
+        let mut buttons = Vec::new();
+        for side in [Side::Left, Side::Right] {
+            let slot = &mut self.pending[side_index(side)];
+            if slot.is_some_and(|deadline| deadline <= now) {
+                *slot = None;
+                buttons.push(paddle_button(side, false));
+            }
+        }
+        buttons
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.pending.iter().flatten().min().copied()
+    }
+}
+
+enum BondOutcome {
+    Paired([u8; 16]),
+    NotReady,
+}
+
+async fn next_bond_chunk(notifications: &mut Notifications, wait: Duration) -> Result<Option<Vec<u8>>> {
+    let deadline = Instant::now() + wait;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match timeout(remaining, notifications.next()).await {
+            Err(_) => return Ok(None),
+            Ok(None) => return Err(anyhow!("connection lost")),
+            Ok(Some(notification)) if notification.uuid == sram::BOND => return Ok(Some(notification.value)),
+            Ok(Some(_)) => {}
+        }
+    }
+}
+
+async fn collect_bond_bytes(notifications: &mut Notifications, length: usize, wait: Duration) -> Result<Option<Vec<u8>>> {
+    let deadline = Instant::now() + wait;
+    let mut bytes = Vec::new();
+    while bytes.len() < length {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match next_bond_chunk(notifications, remaining).await? {
+            Some(chunk) => bytes.extend(chunk),
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(bytes))
+}
+
+async fn write_with_response(peripheral: &Peripheral, characteristic: &Characteristic, bytes: &[u8]) -> Result<()> {
+    peripheral
+        .write(characteristic, bytes, WriteType::WithResponse)
+        .await
+        .context("write failed")
+}
+
+async fn sram_bond(peripheral: &Peripheral, bond: &Characteristic, notifications: &mut Notifications) -> Result<BondOutcome> {
+    while next_bond_chunk(notifications, Duration::from_millis(50)).await?.is_some() {}
+    let handshake = Handshake::new()?;
+    write_with_response(peripheral, bond, &sram::BOND_INIT).await?;
+    let Some(device_public) = next_bond_chunk(notifications, BOND_REPLY_WAIT).await? else {
+        return Ok(BondOutcome::NotReady);
+    };
+    if device_public.len() != 16 {
+        return Ok(BondOutcome::NotReady);
+    }
+    write_with_response(peripheral, bond, &handshake.public_key()).await?;
+    let transport = collect_bond_bytes(notifications, sram::KEY_TRANSPORT_LEN, BOND_KEY_WAIT)
+        .await?
+        .context("the derailleur stopped answering during pairing")?;
+    let key = handshake.device_key(&device_public, &transport[..sram::KEY_TRANSPORT_LEN])?;
+    write_with_response(peripheral, bond, &sram::BOND_FINISH).await?;
+    Ok(BondOutcome::Paired(key))
+}
+
+fn save_keys(store: &KeyStore, label: &str, events: &broadcast::Sender<EngineEvent>) {
+    if let Err(error) = store.save() {
+        let _ = events.send(EngineEvent::Log { message: format!("{label}: could not save the SRAM key ({error:#})") });
+    }
+}
+
+async fn sram_session(
+    peripheral: &Peripheral,
+    label: &str,
+    settings: &watch::Receiver<Config>,
+    access: &Access,
+    raw: &mpsc::UnboundedSender<RawInput>,
+    events: &broadcast::Sender<EngineEvent>,
+    mut stop: watch::Receiver<bool>,
+) -> Result<()> {
+    let device = peripheral.address().to_string();
+    let log = |message: String| {
+        let _ = events.send(EngineEvent::Log { message });
+    };
+    let (_link, trigger) = connect_for(peripheral, access, sram::TRIGGER).await?;
+    let trigger = trigger.context("SRAM press characteristic not found; is this the rear derailleur?")?;
+    let bond = find(peripheral, sram::BOND);
+    let mut notifications: Notifications = peripheral.notifications().await.context("opening notification stream")?;
+    peripheral.subscribe(&trigger).await.context("subscribing to SRAM presses")?;
+    let _ = events.send(EngineEvent::DeviceConnected {
+        id: device.clone(),
+        name: label.to_string(),
+        kind: SRAM_KIND.to_string(),
+    });
+    if let Some(battery) = find(peripheral, sram::BATTERY_LEVEL) {
+        if let Some(level) = peripheral.read(&battery).await.ok().and_then(|value| value.first().copied()) {
+            let _ = events.send(EngineEvent::Battery { id: device.clone(), level });
+        }
+    }
+
+    let mut store = KeyStore::load();
+    let mut key = store.find(&device).map(|(key, source)| {
+        if matches!(source, KeySource::BikeControl) {
+            log(format!("{label}: using the pairing key BikeControl saved"));
+        }
+        key
+    });
+    if key.is_none() {
+        log(format!("{label}: not paired with FreeShift yet. Hold the AXS button on the rear derailleur until its light flashes."));
+    }
+
+    let mut health = interval(KEEPALIVE);
+    let mut pairing = interval(PAIR_RETRY);
+    let mut is_bond_subscribed = false;
+    let mut clicks = PaddleClicks::default();
+
+    let outcome = loop {
+        let wait = async {
+            match clicks.next_deadline() {
+                Some(at) => sleep_until(at).await,
+                None => pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break Ok(());
+                }
+            }
+            notification = notifications.next() => {
+                let Some(notification) = notification else {
+                    break Err(anyhow!("connection lost"));
+                };
+                if notification.uuid != sram::TRIGGER || notification.value.as_slice() != [sram::PRESS_EDGE] {
+                    continue;
+                }
+                let Some(current) = key else {
+                    continue;
+                };
+                let frame = match peripheral.read(&trigger).await {
+                    Ok(frame) => frame,
+                    Err(error) => {
+                        log(format!("{label}: could not read the press ({error})"));
+                        continue;
+                    }
+                };
+                match sram::open(&current, &frame) {
+                    Ok(plain) => match sram::decode_press(&plain).and_then(|press| press.side()) {
+                        Some(side) => {
+                            let (doubles, window) = {
+                                let config = settings.borrow();
+                                (SramDoubles::from_config(&config), config.double_tap_window())
+                            };
+                            if let Some(button) = clicks.press(side, doubles, Instant::now(), window) {
+                                let _ = raw.send(RawInput::Pulse { device: device.clone(), button });
+                            }
+                        }
+                        None => log(format!("{label}: press from an unknown control ({})", hex(&plain))),
+                    },
+                    Err(_) => {
+                        store.reject(&device, &current);
+                        save_keys(&store, label, events);
+                        key = None;
+                        log(format!("{label}: the saved key no longer matches; another app paired with it. Hold the AXS button on the rear derailleur until its light flashes to pair again."));
+                    }
+                }
+            }
+            _ = wait => {
+                for button in clicks.expired(Instant::now()) {
+                    let _ = raw.send(RawInput::Pulse { device: device.clone(), button });
+                }
+            }
+            _ = pairing.tick(), if key.is_none() => {
+                let Some(bond) = &bond else {
+                    continue;
+                };
+                if !is_bond_subscribed {
+                    if let Err(error) = peripheral.subscribe(bond).await {
+                        log(format!("{label}: pairing channel unavailable ({error})"));
+                        continue;
+                    }
+                    is_bond_subscribed = true;
+                }
+                match sram_bond(peripheral, bond, &mut notifications).await {
+                    Ok(BondOutcome::Paired(new_key)) => {
+                        store.remember(&device, &new_key);
+                        save_keys(&store, label, events);
+                        key = Some(new_key);
+                        log(format!("{label}: paired with FreeShift; the paddles are ready"));
+                    }
+                    Ok(BondOutcome::NotReady) => {}
+                    Err(error) => log(format!("{label}: pairing failed ({error:#}); keep holding the AXS button and FreeShift tries again")),
+                }
+            }
+            _ = health.tick() => {
+                if !peripheral.is_connected().await.unwrap_or(false) {
+                    break Err(anyhow!("connection lost"));
+                }
+            }
+        }
+    };
+
+    let _ = events.send(EngineEvent::DeviceDisconnected { id: device, name: label.to_string() });
+    outcome
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_clicks_fire_at_once_without_a_double_action() {
+        let mut clicks = PaddleClicks::default();
+        let doubles = SramDoubles { left: false, right: false };
+        let now = Instant::now();
+        assert_eq!(clicks.press(Side::Left, doubles, now, Duration::from_millis(350)), Some(Button::SramLeft));
+        assert_eq!(clicks.press(Side::Right, doubles, now, Duration::from_millis(350)), Some(Button::SramRight));
+        assert_eq!(clicks.next_deadline(), None);
+    }
+
+    #[test]
+    fn two_clicks_inside_the_window_make_a_double() {
+        let mut clicks = PaddleClicks::default();
+        let doubles = SramDoubles { left: true, right: false };
+        let now = Instant::now();
+        let window = Duration::from_millis(350);
+        assert_eq!(clicks.press(Side::Left, doubles, now, window), None);
+        assert_eq!(clicks.press(Side::Left, doubles, now + Duration::from_millis(200), window), Some(Button::SramLeftDouble));
+        assert!(clicks.expired(now + Duration::from_secs(1)).is_empty());
+    }
+
+    #[test]
+    fn a_lone_click_fires_when_the_window_ends() {
+        let mut clicks = PaddleClicks::default();
+        let doubles = SramDoubles { left: true, right: true };
+        let now = Instant::now();
+        let window = Duration::from_millis(350);
+        assert_eq!(clicks.press(Side::Right, doubles, now, window), None);
+        assert!(clicks.expired(now + Duration::from_millis(100)).is_empty());
+        assert_eq!(clicks.next_deadline(), Some(now + window));
+        assert_eq!(clicks.expired(now + window), vec![Button::SramRight]);
+        assert_eq!(clicks.next_deadline(), None);
+    }
+
+    #[test]
+    fn a_click_still_fires_when_its_double_action_is_removed() {
+        let mut clicks = PaddleClicks::default();
+        let now = Instant::now();
+        let window = Duration::from_millis(350);
+        assert_eq!(clicks.press(Side::Left, SramDoubles { left: true, right: false }, now, window), None);
+        let without_double = SramDoubles { left: false, right: false };
+        assert_eq!(
+            clicks.press(Side::Left, without_double, now + Duration::from_millis(100), window),
+            Some(Button::SramLeft)
+        );
+        assert_eq!(clicks.expired(now + window), vec![Button::SramLeft]);
+    }
 
     #[test]
     fn recognises_connect_errors() {

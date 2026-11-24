@@ -25,9 +25,23 @@ const PODS = [
     ],
   },
   {
+    id: "sram",
+    title: "SRAM AXS shifters",
+    sentenceTitle: "SRAM AXS shifters",
+    shape: "sram",
+    showWhen: (device) => device.kind.startsWith("SRAM"),
+    buttons: [
+      { button: "SramLeft", glyph: "1×", name: "Left click", kind: "paddle", x: 33, y: 55 },
+      { button: "SramLeftDouble", glyph: "2×", name: "Left double click", kind: "paddle", x: 33, y: 73 },
+      { button: "SramRight", glyph: "1×", name: "Right click", kind: "paddle", x: 67, y: 55 },
+      { button: "SramRightDouble", glyph: "2×", name: "Right double click", kind: "paddle", x: 67, y: 73 },
+    ],
+  },
+  {
     id: "extra",
     title: "Custom trigger",
     compact: true,
+    showWhen: (device) => device.kind.startsWith("Custom trigger"),
     buttons: [
       { button: "Tap", glyph: "1×", name: "Tap", x: 30, y: 50 },
       { button: "DoubleTap", glyph: "2×", name: "Double tap", x: 70, y: 50 },
@@ -44,6 +58,8 @@ const ACTION_GROUPS = [
 ];
 
 const LOG_LIMIT = 300;
+
+const LIVE_SETTING = ["doubleTapMs", "focusWindowPrefix", "keyHoldMs", "keys", "mapping"];
 
 const OUTPUT_FAILURE = /^(OpenBikeControl|Keyboard) output stopped/;
 
@@ -71,9 +87,18 @@ function isDirty() {
   return JSON.stringify(state.saved) !== JSON.stringify(state.draft);
 }
 
+function needsRestart() {
+  return Object.keys(state.draft).some(
+    (setting) => !LIVE_SETTING.includes(setting) && JSON.stringify(state.saved[setting]) !== JSON.stringify(state.draft[setting]),
+  );
+}
+
 function updateSaveBar() {
   const isShown = isDirty();
   element("save-bar").hidden = !isShown;
+  if (isShown) {
+    element("save").textContent = needsRestart() ? "Save and restart" : "Save";
+  }
   document.body.classList.toggle("has-save-bar", isShown);
 }
 
@@ -166,6 +191,7 @@ function renderDevices() {
     list.append(item);
   }
   element("devices-empty").hidden = state.devices.size > 0;
+  renderPods();
   const apps = element("apps");
   apps.replaceChildren();
   for (const app of state.trainerApps.values()) {
@@ -257,10 +283,21 @@ function createLegendRow(entry) {
   return item;
 }
 
-function createShell() {
-  const parts = ["pod-tab nw", "pod-tab ne", "pod-tab sw", "pod-tab se", "pod-body", "pod-led", "pod-plate"];
+const SHELL_PART = {
+  click: ["pod-tab nw", "pod-tab ne", "pod-tab sw", "pod-tab se", "pod-body", "pod-led", "pod-plate"],
+  sram: ["sram-blade start", "sram-blade end", "sram-hood start", "sram-hood end", "sram-paddle start", "sram-paddle end"],
+};
 
-  return parts.map((className) => {
+function isPodShown(pod) {
+  if (!pod.showWhen) {
+    return true;
+  }
+
+  return [...state.devices.values()].some((device) => pod.showWhen(device));
+}
+
+function createShell(shape) {
+  return SHELL_PART[shape].map((className) => {
     const part = document.createElement("div");
     part.className = className;
     part.setAttribute("aria-hidden", "true");
@@ -272,7 +309,10 @@ function createShell() {
 function renderPods() {
   const container = element("pods");
   container.replaceChildren();
-  for (const pod of PODS) {
+  if (!state.draft) {
+    return;
+  }
+  for (const pod of PODS.filter(isPodShown)) {
     const wrap = document.createElement("section");
     wrap.className = pod.compact ? "pod-wrap compact" : "pod-wrap";
     wrap.setAttribute("aria-label", pod.title);
@@ -282,7 +322,7 @@ function renderPods() {
     const shape = document.createElement("div");
     shape.className = pod.compact ? "pod pod-compact" : `pod pod-${pod.id}`;
     if (!pod.compact) {
-      shape.append(...createShell());
+      shape.append(...createShell(pod.shape || "click"));
     }
     for (const entry of pod.buttons) {
       shape.append(createPadButton(entry));
@@ -304,7 +344,7 @@ function renderEditor() {
   }
   const info = buttonInfo(state.selected);
   const current = state.draft.mapping[state.selected] || "None";
-  element("editor-title").textContent = info.pod ? `${info.name} on the ${info.pod.title.toLowerCase()}` : info.name;
+  element("editor-title").textContent = info.pod ? `${info.name} on the ${info.pod.sentenceTitle || info.pod.title.toLowerCase()}` : info.name;
   element("editor-current").textContent = `Now: ${actionLabel(current)}`;
   const supported = supportedActions();
   const isKeyboard = state.draft.output === "Keyboard";
@@ -372,11 +412,7 @@ function closeEditor() {
 }
 
 function assignAction(button, action) {
-  if (action === "None") {
-    delete state.draft.mapping[button];
-  } else {
-    state.draft.mapping[button] = action;
-  }
+  state.draft.mapping[button] = action;
   renderPods();
   renderKeys();
   updateSaveBar();

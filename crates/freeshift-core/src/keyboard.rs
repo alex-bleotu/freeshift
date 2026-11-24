@@ -13,6 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::BOOL;
 
+use crate::config::Config;
 use crate::model::{Action, EngineEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,49 +128,114 @@ pub fn focus_window(prefix: &str) -> bool {
     unsafe { SetForegroundWindow(window) }.as_bool()
 }
 
-pub async fn run(
+#[derive(Debug, PartialEq, Eq)]
+struct Bindings {
     keys: HashMap<Action, Key>,
     hold: Duration,
     focus_prefix: String,
     description: String,
+    unknown: Vec<String>,
+}
+
+impl Bindings {
+    fn from_config(config: &Config) -> Bindings {
+        let mut keys = HashMap::new();
+        let mut unknown = Vec::new();
+        for (action, name) in &config.keys {
+            if name.trim().is_empty() {
+                continue;
+            }
+            match parse_key(name) {
+                Some(key) => {
+                    keys.insert(*action, key);
+                }
+                None => unknown.push(format!("Unknown key \"{name}\" for {}", action.label())),
+            }
+        }
+        let focus_prefix = config.focus_window_prefix.clone();
+        let target = if focus_prefix.trim().is_empty() {
+            "the active window".to_string()
+        } else {
+            format!("the \"{focus_prefix}\" window")
+        };
+        let key_of = |action: Action| config.keys.get(&action).cloned().unwrap_or_else(|| "none".to_string());
+        let description = format!(
+            "Keyboard output: {} shifts up, {} shifts down, {} keys in total, sent to {target}",
+            key_of(Action::ShiftUp),
+            key_of(Action::ShiftDown),
+            keys.len()
+        );
+        Bindings {
+            keys,
+            hold: Duration::from_millis(config.key_hold_ms),
+            focus_prefix,
+            description,
+            unknown,
+        }
+    }
+
+    fn announce(&self, events: &broadcast::Sender<EngineEvent>) {
+        for message in &self.unknown {
+            let _ = events.send(EngineEvent::Log { message: message.clone() });
+        }
+        let _ = events.send(EngineEvent::OutputReady { description: self.description.clone() });
+    }
+}
+
+pub async fn run(
+    mut settings: watch::Receiver<Config>,
     mut actions: mpsc::UnboundedReceiver<(Action, bool)>,
     events: broadcast::Sender<EngineEvent>,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
-    let _ = events.send(EngineEvent::OutputReady { description });
-    let mut pressed_at: HashMap<Action, Instant> = HashMap::new();
+    let mut bindings = Bindings::from_config(&settings.borrow_and_update());
+    bindings.announce(&events);
+    let mut held: HashMap<Action, (Key, Instant)> = HashMap::new();
     let mut warned_focus = false;
     loop {
         tokio::select! {
+            biased;
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
                     break;
+                }
+            }
+            Ok(()) = settings.changed() => {
+                let next = Bindings::from_config(&settings.borrow_and_update());
+                if next != bindings {
+                    warned_focus = warned_focus && next.focus_prefix == bindings.focus_prefix;
+                    bindings = next;
+                    bindings.announce(&events);
                 }
             }
             action = actions.recv() => {
                 let Some((action, pressed)) = action else {
                     break;
                 };
-                let Some(key) = keys.get(&action).copied() else {
-                    continue;
-                };
                 if pressed {
-                    if !focus_window(&focus_prefix) && !warned_focus {
+                    let Some(key) = bindings.keys.get(&action).copied() else {
+                        continue;
+                    };
+                    if !focus_window(&bindings.focus_prefix) && !warned_focus {
                         warned_focus = true;
                         let _ = events.send(EngineEvent::Log {
-                            message: format!("No window starting with \"{focus_prefix}\" found; sending keys to the active window"),
+                            message: format!(
+                                "No window starting with \"{}\" found; sending keys to the active window",
+                                bindings.focus_prefix
+                            ),
                         });
                     }
-                    pressed_at.insert(action, Instant::now());
+                    held.insert(action, (key, Instant::now()));
                     if let Err(error) = send_key(key, true) {
                         let _ = events.send(EngineEvent::Log { message: error.to_string() });
                     }
                 } else {
-                    if let Some(started) = pressed_at.remove(&action) {
-                        let elapsed = started.elapsed();
-                        if elapsed < hold {
-                            tokio::time::sleep(hold - elapsed).await;
-                        }
+                    let Some((key, started)) = held.remove(&action) else {
+                        continue;
+                    };
+                    let elapsed = started.elapsed();
+                    if elapsed < bindings.hold {
+                        tokio::time::sleep(bindings.hold - elapsed).await;
                     }
                     if let Err(error) = send_key(key, false) {
                         let _ = events.send(EngineEvent::Log { message: error.to_string() });
@@ -178,10 +244,8 @@ pub async fn run(
             }
         }
     }
-    for action in pressed_at.keys() {
-        if let Some(key) = keys.get(action) {
-            let _ = send_key(*key, false);
-        }
+    for (key, _) in held.values() {
+        let _ = send_key(*key, false);
     }
     Ok(())
 }
@@ -205,6 +269,47 @@ mod tests {
     #[test]
     fn arrows_are_extended() {
         assert_eq!(parse_key("Up"), Some(Key { scan: 0x48, extended: true }));
+    }
+
+    #[test]
+    fn bindings_follow_the_config() {
+        let mut config = Config::default();
+        let before = Bindings::from_config(&config);
+        config.mapping.clear();
+        assert_eq!(Bindings::from_config(&config), before);
+
+        config.keys.insert(Action::ShiftUp, "P".to_string());
+        config.keys.insert(Action::ShiftDown, "Hyper".to_string());
+        config.key_hold_ms = 120;
+        let after = Bindings::from_config(&config);
+        assert_eq!(after.keys.get(&Action::ShiftUp).copied(), parse_key("P"));
+        assert_eq!(after.keys.get(&Action::ShiftDown), None);
+        assert_eq!(after.hold, Duration::from_millis(120));
+        assert_eq!(after.unknown.len(), 1);
+        assert!(after.description.contains("P shifts up"));
+    }
+
+    #[tokio::test]
+    async fn announces_again_only_when_its_own_settings_change() {
+        let (settings, settings_receiver) = watch::channel(Config::default());
+        let (_actions, action_receiver) = mpsc::unbounded_channel();
+        let (events, mut received) = broadcast::channel(16);
+        let (stop, stop_receiver) = watch::channel(false);
+        let task = tokio::spawn(run(settings_receiver, action_receiver, events, stop_receiver));
+        assert!(matches!(received.recv().await, Ok(EngineEvent::OutputReady { .. })));
+
+        settings.send_modify(|config| config.mapping.clear());
+        tokio::task::yield_now().await;
+        settings.send_modify(|config| {
+            config.keys.insert(Action::ShiftUp, "P".to_string());
+        });
+        let Ok(EngineEvent::OutputReady { description }) = received.recv().await else {
+            panic!("expected the new description");
+        };
+        assert!(description.contains("P shifts up"));
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+        assert!(received.try_recv().is_err());
     }
 
     #[test]

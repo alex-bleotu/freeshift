@@ -476,6 +476,81 @@ button.link {
   box-shadow: 0 0 0 6px #1b1e22, 0 0 0 7px var(--shell-edge), inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
+.sram-hood {
+  position: absolute;
+  inset-block-start: 4%;
+  inline-size: 72px;
+  block-size: 96px;
+  border-radius: 30px 30px 22px 22px;
+  background: radial-gradient(circle at 50% 30%, var(--shell-light), var(--shell) 72%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+.sram-hood::before {
+  content: "";
+  position: absolute;
+  inset-block-start: -12px;
+  inline-size: 28px;
+  block-size: 32px;
+  border-radius: 12px 12px 8px 8px;
+  background: var(--shell-light);
+}
+
+.sram-hood.start {
+  inset-inline-start: calc(30% - 36px);
+}
+
+.sram-hood.start::before {
+  inset-inline-start: 8px;
+}
+
+.sram-hood.end {
+  inset-inline-start: calc(70% - 36px);
+}
+
+.sram-hood.end::before {
+  inset-inline-end: 8px;
+}
+
+.sram-blade {
+  position: absolute;
+  inset-block-start: 34%;
+  inline-size: 32px;
+  block-size: 156px;
+  border-radius: 8px 8px 16px 16px;
+  background: linear-gradient(180deg, var(--shell-light), var(--shell));
+  box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+  transform-origin: 50% 0;
+}
+
+.sram-blade.start {
+  inset-inline-start: calc(30% - 16px);
+  transform: rotate(6deg);
+}
+
+.sram-blade.end {
+  inset-inline-start: calc(70% - 16px);
+  transform: rotate(-6deg);
+}
+
+.sram-paddle {
+  position: absolute;
+  inset-block-start: 46%;
+  inline-size: 40px;
+  block-size: 100px;
+  border-radius: 12px;
+  background: var(--plate);
+  box-shadow: 0 0 0 1px var(--shell-edge), inset 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.sram-paddle.start {
+  inset-inline-start: calc(33% - 20px);
+}
+
+.sram-paddle.end {
+  inset-inline-start: calc(67% - 20px);
+}
+
 .pod-compact {
   block-size: 96px;
   border-radius: 48px;
@@ -506,6 +581,14 @@ button.link {
   block-size: 48px;
   background: var(--plate);
   border: 1px solid var(--shell-edge);
+}
+
+.pad-button.paddle {
+  inline-size: 32px;
+  block-size: 32px;
+  background: #23272c;
+  border: 1px solid var(--shell-edge);
+  font-size: 12px;
 }
 
 .pad-button.face {
@@ -571,7 +654,8 @@ button.link {
   transform: translate(-50%, -50%) scale(0.97);
 }
 
-.pad-button.round.down {
+.pad-button.round.down,
+.pad-button.paddle.down {
   background: var(--up);
   border-color: var(--up);
 }

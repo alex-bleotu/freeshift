@@ -9,6 +9,7 @@ use tokio::sync::broadcast;
 use tokio::time::{Instant, sleep, timeout};
 
 use crate::ble::{connect, display_name, first_adapter};
+use crate::link::Link;
 use crate::model::{EngineEvent, hex};
 
 #[derive(Clone, Debug, Serialize)]
@@ -110,6 +111,10 @@ pub async fn explore(filter: &str, listen_seconds: u64, events: broadcast::Sende
         .map(|properties| display_name(&properties))
         .unwrap_or_default();
     log(format!("Connecting to {name} {}", peripheral.address()));
+    let _link = Link::open(peripheral.address(), Duration::from_secs(15))
+        .await
+        .context("connection failed")?;
+    log("Link is up; reading services".to_string());
     connect(&peripheral).await?;
 
     for service in peripheral.services() {

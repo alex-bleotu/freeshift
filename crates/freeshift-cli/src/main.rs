@@ -201,7 +201,8 @@ async fn obc_test() -> Result<()> {
     let (events, _) = broadcast::channel(256);
     let printer = spawn_printer(&events);
     let (stop, stop_receiver) = watch::channel(false);
-    let (actions, output) = spawn_output(&config, events.clone(), stop_receiver);
+    let (_settings, settings_receiver) = watch::channel(config.clone());
+    let (actions, output) = spawn_output(settings_receiver, events.clone(), stop_receiver);
     println!("In MyWhoosh, add the controller \"{}\". Then type u or d and Enter. q quits.", config.controller_name);
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Some(line) = lines.next_line().await? {

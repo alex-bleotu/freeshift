@@ -6,6 +6,7 @@ pub mod keyboard;
 mod link;
 pub mod model;
 pub mod obc;
+pub mod sram;
 pub mod protobuf;
 pub mod tracker;
 pub mod zwift;
