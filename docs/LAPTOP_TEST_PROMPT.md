@@ -4,11 +4,12 @@ Open Claude Code on the laptop that sits next to the bike, then paste everything
 
 ---
 
-You are helping me test **FreeShift** on this laptop: https://github.com/alex-bleotu/freeshift. FreeShift is a free Windows app that turns Zwift Click button presses into virtual shifting in MyWhoosh. It sends button presses to MyWhoosh over the local network (OpenBikeControl) or as key presses. I also want to find out whether my SRAM AXS shifters can be supported. Collect everything into one results folder that I will take back to my main PC.
+You are helping me test **FreeShift** on this laptop: https://github.com/alex-bleotu/freeshift. FreeShift is a free Windows app that turns Zwift Click and SRAM AXS shifter presses into virtual shifting in MyWhoosh. It sends button presses to MyWhoosh over the local network (OpenBikeControl) or as key presses. SRAM AXS support is in 0.2.0 and newer. Collect everything into one results folder that I will take back to my main PC.
 
 ## Rules
 
-- Never write anything to the SRAM shifters or derailleur. Only use the read-only `explore` and `scan` commands.
+- Never write anything to the SRAM shifters or derailleur yourself. The only writes allowed are FreeShift's own pairing messages in section 4, after I agree. `scan` and `explore` are read-only.
+- `freeshift-cli.exe run` and the FreeShift app (0.2.0 and newer) connect to any awake SRAM rear derailleur and try to pair when they have no key. Until section 4, ask me to leave the bike's drivetrain untouched so it stays asleep.
 - Do not pair the Zwift Click in Windows Bluetooth settings. FreeShift connects on its own.
 - Ask me before anything I have to do physically (pressing buttons, waking devices, plugging in the phone). Tell me exactly what to press and in which order, then wait for me.
 - Do not upload, commit or post any results. Everything stays in the results folder.
@@ -51,13 +52,21 @@ Start the installer with `explorer.exe` (or ask me to double-click it; on a Smar
 
 Write down anything that looks wrong or confusing.
 
-## 4. SRAM AXS, read-only
+## 4. SRAM AXS
 
-1. Ask me to press a shifter paddle, then immediately run `freeshift-cli.exe scan 10` and save it as `sram-scan.txt`. Each component appears as `SRAM <number>`. Ask me which number is which part if it isn't obvious; shifters advertise for only about 20 seconds after a press.
-2. For each component (left shifter, right shifter, derailleur, blips if any): ask me to wake it, run `freeshift-cli.exe explore "SRAM <number>" 60` and save it as `sram-explore-<part>.txt`. When it prints "Listening", tell me to press each paddle and blip three times, slowly. Note the order I used.
-3. Summarize: which characteristics are `notify`/`indicate`, and whether any of them printed a value when I pressed something.
+This needs FreeShift 0.2.0 or newer (the app's footer shows the version). With an older one, do only steps 1 and 2.
+
+1. Read-only check: close the FreeShift app, ask me to press a shifter paddle, then immediately run `freeshift-cli.exe scan 10` and save it as `sram-scan.txt`. Each component appears as `SRAM <number>`. Ask me which number is which part if it isn't obvious; shifters advertise for only about 20 seconds after a press.
+2. Ask me to wake the drivetrain again, run `freeshift-cli.exe explore "SRAM <derailleur number>" 60` and save it as `sram-explore-derailleur.txt`. When it prints "Listening", tell me to press each paddle and blip three times, slowly. Note the order I used and which characteristic printed a value.
+3. Ask me before pairing. Tell me that pairing here replaces the derailleur's key, so FreeShift or BikeControl on another PC has to pair again afterwards. BikeControl and the SRAM AXS app must be closed on every device nearby.
+4. Run `freeshift-cli.exe run` for about 4 minutes and save the output to `sram-test.log`. Ask me to wake the drivetrain. If the log says it isn't paired, ask me to hold the AXS button on the rear derailleur until its light flashes, and to keep holding until the log says it is paired.
+5. Ask me to press, slowly: left three times, right three times, then any blips. Note which presses printed `SramLeft` or `SramRight`, which printed nothing, and whether the derailleur also moved each time.
+6. Leave the drivetrain alone for 5 minutes, start `run` again, and ask me to wake it and press left and right once. It should connect without pairing again.
+7. In the app, give **Right double click** an action, save, and ask me to double click and then single click the right paddle. Remove the action again afterwards.
 
 ## 5. Android recording of BikeControl's SRAM setup (optional, ask me first)
+
+The main thing FreeShift still lacks for SRAM is how BikeControl stops the paddles from moving the derailleur, and how it restores that. This recording may help find it. BikeControl's setup replaces the derailleur's key, so FreeShift has to pair again afterwards.
 
 Only if I have an Android phone and agree:
 
@@ -76,7 +85,8 @@ Write `%USERPROFILE%\FreeShift-test\REPORT.md` with:
 - MyWhoosh: version, platform (laptop/phone), did FreeShift appear, did it connect, which way Plus and Minus shifted, the `supports:` line if any
 - idle test result, keyboard fallback result
 - app check notes
-- SRAM: components found, characteristics per component, which notified on a press (with the hex), and the press order
+- SRAM: components found, derailleur characteristics, which notified on a press (with the hex), and the press order
+- SRAM in FreeShift: did pairing work and how long it took, a table (paddle, did it register, did the derailleur move), reconnect without pairing, double click
 - Android capture: done or not, the button order and times, the first 200 lines of `sram-capture.txt`
 - every problem or error message, quoted exactly
 

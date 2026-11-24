@@ -1,6 +1,6 @@
 # FreeShift
 
-Free Windows app that turns Zwift Click buttons (and other Bluetooth LE buttons) into virtual gear shifts in MyWhoosh. No account, no subscription, no telemetry. MIT licence.
+Free Windows app that turns Zwift Click buttons, SRAM AXS shifters and other Bluetooth LE buttons into virtual gear shifts in MyWhoosh. No account, no subscription, no telemetry. MIT licence.
 
 Not affiliated with Zwift, SRAM or MyWhoosh.
 
@@ -26,16 +26,31 @@ If Windows asks whether FreeShift may use the network, allow **private** network
 | Zwift Click v2, left pod | Works only while Zwift's own app has unlocked it in the last ~24 h |
 | Zwift Ride | Same keypad message as Click v2, untested |
 | Zwift Play | Not supported (encrypted) |
-| SRAM AXS | Not supported yet, see below |
+| SRAM AXS shifters | Through the rear derailleur: left and right paddle, single and double click, see below |
 | Any other BLE button | "Custom trigger": any notification on one characteristic = tap, two quick ones = double tap |
 
 ### SRAM AXS
 
-Current SRAM AXS indoor shifting works by bonding an app to the rear derailleur (hold its AXS button until the light flashes) and switching the derailleur into a mode where shifter presses are reported to the app instead of moving the derailleur. That bonding uses an encrypted key exchange whose UUIDs, key parameters and message format are not public, so FreeShift cannot do it today. Adding it needs a capture of the Bluetooth traffic during that setup on your own drivetrain. The custom trigger above only helps if a shifter exposes a plain notification on a press without bonding, which `freeshift-cli explore SRAM` shows.
+FreeShift connects to the rear derailleur, which reports every paddle press and which shifter it came from.
 
-The **Controller** card shows both Click v2 pods. Buttons light up when you press them; click one to pick its action: shift up / down, menu navigation (Up, Down, Left, Right, OK, Back, Menu, Home), steering, U-turn, power-up, emote, camera, HUD, map and workout controls. These are the OpenBikeControl button IDs; when MyWhoosh reports which ones it accepts, the rest are dimmed. In keyboard mode each action gets its own key.
+- **Left and right paddles** each get their own action (left shifts down and right shifts up by default).
+- **Double clicks** on either side can have their own action. They are off by default, so single clicks act at once; with one set, single clicks on that side wait for the double-tap time (350 ms).
+- **Pairing inside FreeShift**, without Windows Bluetooth settings or an account. If BikeControl is set up on the same PC, FreeShift uses the key it saved.
+- **Reconnects by itself** when the drivetrain wakes up. The key stays on this PC in `%APPDATA%\FreeShift\sram_keys.json`.
+- **Battery level** of the derailleur in the app.
+- **Live drawing** of the shifters that lights up on presses.
 
-Default mapping: Plus → Shift up, Minus → Shift down, B → Shift down (so a right-pod-only Click v2 has both directions), A → OK, Y → Menu, Z → Back, Up / Down → menu up / down, Left / Right → steer, Tap → up, Double tap → down. **Swap shift up / down** flips only the gear actions.
+To pair, wake the drivetrain with a paddle press. When **Activity** says the derailleur isn't paired, hold the AXS button on the rear derailleur until its light flashes and keep holding until Activity says it is paired.
+
+The paddles also keep moving the derailleur unless another app has turned that off. Pairing gives the derailleur a new key, so an app that paired with it before has to pair again.
+
+### Buttons and actions
+
+The **Controller** card shows both Click v2 pods, and the SRAM shifters while a derailleur is connected. Buttons light up when you press them; click one to pick its action: shift up / down, menu navigation (Up, Down, Left, Right, OK, Back, Menu, Home), steering, U-turn, power-up, emote, camera, HUD, map and workout controls. These are the OpenBikeControl button IDs; when MyWhoosh reports which ones it accepts, the rest are dimmed. In keyboard mode each action gets its own key.
+
+Default mapping: Plus → Shift up, Minus → Shift down, B → Shift down (so a right-pod-only Click v2 has both directions), A → OK, Y → Menu, Z → Back, Up / Down → menu up / down, Left / Right → steer, Tap → up, Double tap → down, SRAM left → Shift down, SRAM right → Shift up. **Swap shift up / down** flips only the gear actions.
+
+Button actions, keys and the double-tap time apply when you press **Save**, without dropping any connection. Changes to the connection settings show **Save and restart**.
 
 ## Hardware test checklist
 
@@ -47,7 +62,7 @@ Do these in order and report the results (copy the lines from **Activity** or fr
 4. **Direction.** If gears go the wrong way, press **Swap up / down** and recheck.
 5. **Idle test (Click v2).** Leave the Click untouched for 3 minutes, then press. Report: still shifts? Any "Disconnected" lines?
 6. **Keyboard fallback** (only if step 3 fails). Output → Keyboard keys → Save. Report: does I shift up or down?
-7. **SRAM AXS (read-only).** Wake the shifter, then run `target\release\freeshift-cli.exe explore SRAM 60` from this folder. Press each paddle and blip during the 60 s. Send the whole output. Nothing is written to the derailleur.
+7. **SRAM AXS.** Wake the drivetrain with a paddle press and pair it as described above. Press left three times, then right three times. Report: the Activity lines, whether each press lights up the right paddle and acts in MyWhoosh, and whether the derailleur also moves.
 
 ## Command-line tool
 
@@ -63,11 +78,7 @@ Download `freeshift-cli.exe` from the latest release, or build it with `cargo bu
 | `freeshift-cli key-test I 5` | Press I in MyWhoosh after 5 s |
 | `freeshift-cli swap` / `output obc\|keys` / `keys I K` / `trigger <name> <uuid>` | Edit settings |
 
-Settings live in `%APPDATA%\FreeShift\config.json`; the app and the CLI share them.
-
-## Testing on another PC
-
-[docs/LAPTOP_TEST_PROMPT.md](docs/LAPTOP_TEST_PROMPT.md) is a prompt for Claude Code on the PC next to the bike. It downloads the release, walks through the Zwift Click, MyWhoosh and read-only SRAM tests, decodes an Android Bluetooth recording with [tools/btsnoop_dump.py](tools/btsnoop_dump.py), and writes everything into a `FreeShift-test` folder with a `REPORT.md`.
+Settings live in `%APPDATA%\FreeShift\config.json` and SRAM keys in `sram_keys.json` next to it; the app and the CLI share them.
 
 ## Build from source
 
@@ -105,4 +116,5 @@ app/ui                  plain HTML/CSS/JS front end, no build step
 
 - Zwift Click v2 protocol details: [ClickTamer](https://github.com/Tom-Webstar/ClickTamer) and [zwiftboard](https://github.com/AntoninGuilbaud/zwiftboard) (both MIT). No code copied; FreeShift is a fresh Rust implementation.
 - Zwift Click v1 message layout: BikeControl v4.6.2, the last GPL-3.0 release (facts only, no code).
+- SRAM AXS pairing and encryption: the protocol description in [sram-axs](https://github.com/GaborWnuk/sram-axs) (MPL-2.0). No code copied; its worked example is used as test data. Reading paddle presses was worked out from recorded Bluetooth traffic.
 - [OpenBikeControl protocol](https://github.com/OpenBikeControl/openbikecontrol-protocol) (MIT).

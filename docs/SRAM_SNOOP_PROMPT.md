@@ -1,10 +1,14 @@
 # SRAM AXS capture and analysis (prompt for a separate Claude session)
 
+**Status (November 2026):** pairing and paddle presses are solved and built into FreeShift 0.2.0 (see `crates/freeshift-core/src/sram.rs` and [sram-axs](https://github.com/GaborWnuk/sram-axs)). What is still unknown is the mode switch: the writes that stop the paddles from moving the derailleur, and the ones that restore it.
+
+The values read from the derailleur are encrypted with its key, so the mode-switch writes probably are too. An Android recording doesn't contain that key. On a Windows PC, BikeControl saves it in `%APPDATA%\de.jonasbark\BikeControl\shared_preferences.json` (`flutter.sram_key_<address>`), so recording BikeControl on Windows with Microsoft's Bluetooth Test Platform (`btvs`) and Wireshark is the better route. Use the Android steps to find which characteristics are written and when. Never publish the key.
+
 Paste everything below the line into a new Claude Code session on a Windows PC that has Python 3, an Android phone with a USB cable, and the bike with the SRAM AXS drivetrain nearby.
 
 ---
 
-You are helping me capture and understand how the **BikeControl** Android app talks to my **SRAM AXS** drivetrain over Bluetooth LE, so that my own open-source app **FreeShift** (https://github.com/alex-bleotu/freeshift) can support SRAM shifters. BikeControl pairs with the rear derailleur (I hold the derailleur's AXS button until its light flashes), then switches the derailleur into a mode where shifter presses are reported to the app instead of moving the derailleur. The goal is a written protocol description, built only from the Bluetooth traffic of my own devices.
+You are helping me capture and understand how the **BikeControl** Android app talks to my **SRAM AXS** drivetrain over Bluetooth LE, so that my own open-source app **FreeShift** (https://github.com/alex-bleotu/freeshift) can stop the paddles from moving the derailleur during a ride, and restore them afterwards. FreeShift already pairs and reads paddle presses. BikeControl pairs with the rear derailleur (I hold the derailleur's AXS button until its light flashes), then switches the derailleur into a mode where shifter presses are reported to the app instead of moving the derailleur. The goal is a written description of that mode switch, built only from the Bluetooth traffic of my own devices.
 
 ## Rules
 
@@ -54,6 +58,8 @@ For each capture:
 3. Find the derailleur connection: the device address BikeControl connected to (SRAM components advertise company ID `0x0933` and service UUID `0xFE51`, named `SRAM <serial>`). Ignore other devices.
 
 ## 6. Analyse
+
+Already known, don't work it out again: there is no SMP pairing; the pairing handshake runs on `d905ee52`; each press is a single `FF` byte notified on `d9050054`, and reading that characteristic gives the encrypted press; every encrypted value is AES-128-EAX (16-byte nonce, ciphertext, 16-byte tag). Concentrate on points 3, 4 and 6.
 
 Write `%USERPROFILE%\SRAM-capture\SRAM_PROTOCOL.md` covering:
 

@@ -2,7 +2,7 @@
 
 Goal: a free Windows app that turns Zwift Click and SRAM AXS button presses into virtual gear shifts in MyWhoosh.
 
-Status of each piece, as of 2026-11-17:
+Status of each piece, as of 2026-11-17 (SRAM rows updated 2026-11-24):
 
 | Piece | Confidence | Notes |
 |---|---|---|
@@ -11,8 +11,9 @@ Status of each piece, as of 2026-11-17:
 | Zwift Click v2 input (left pod) | Low | Needs a daily unlock signed by Zwift's servers |
 | Output to MyWhoosh over the network (OpenBikeControl) | Medium-high | Open MIT spec, MyWhoosh lists it as implemented |
 | Output to MyWhoosh as I/K key presses | Medium | Works, but up/down direction is disputed and MyWhoosh must have focus |
-| SRAM AXS individual buttons | Low | Proprietary bonding + crypto, nothing public |
-| SRAM AXS "any button pressed" | Medium-low | An earlier BikeControl release did this; UUIDs are not public, you have to find them |
+| SRAM AXS left / right paddle | Medium-high | Solved and built into FreeShift 0.2.0 |
+| SRAM AXS without moving the derailleur | Low | The writes that turn shifting off and on again are unknown |
+| SRAM AXS "any button pressed" | High | A single `FF` byte notified on `d9050054` for the bonded app |
 
 Before anything else: ask yourself which Click you own. v1 is a single grey puck that pairs alone. v2 comes as a left and right pair with more buttons.
 
@@ -144,6 +145,18 @@ From ClickTamer / zwiftboard (both MIT, Go, Windows) and qdomyos PR #4743:
 
 ## 3. SRAM AXS: what is known and how to find the rest
 
+### Update 2026-11-24: solved, except turning shifting off
+
+The rest of this section is the state before the capture and is kept for background.
+
+- All security is at the application level: no SMP pairing and no link encryption.
+- **Key.** Finite-field Diffie-Hellman on `d905ee52` while the derailleur's AXS button is held (g = 5, p = 2^128 - 713, 16-byte big-endian values). After the fixed first message the derailleur replies with 16 bytes (its public key) in pairing mode and 48 bytes otherwise. It then sends a new 16-byte key, encrypted under the shared secret. Each pairing replaces the key, so older ones stop working. Documented in [sram-axs](https://github.com/GaborWnuk/sram-axs) (PROTOCOL.md, MPL-2.0) and reproduced against its worked example.
+- **Encrypted values.** AES-128-EAX: 16-byte nonce, ciphertext, 16-byte tag, no header.
+- **Presses.** `d9050054` notifies one `FF` byte per press, with no release, and apparently only to the app that paired last. Reading it gives a 36-byte encrypted value; decrypted, protobuf field 2 is the shifter (0 left, 1 right) and field 3 the button mask.
+- **Still unknown.** The writes BikeControl uses to stop the paddles from moving the derailleur, and to restore them.
+
+Implementation: `crates/freeshift-core/src/sram.rs` and `sram_session` in `ble.rs`.
+
 ### Known
 
 - AXS components advertise only while awake, about 20–24 s for coin-cell shifters/blips after a press, and about 5 min for derailleur/dropper.
@@ -213,7 +226,7 @@ Allow FreeShift through Windows Firewall on **private** networks, and keep the P
 3. **Keep-alive (v2 only):** leave it untouched for 3 minutes, then press. Test: still connected, press is seen.
 4. **OpenBikeControl:** advertise + TCP server, map Click `+` to Shift Up and `-` to Shift Down. Test in MyWhoosh: gear number goes up on `+` and down on `-`.
 5. **Fallback keys:** same mapping, I/K output. Test which key shifts which way and record it.
-6. **SRAM discovery:** section 3 plan, read-only.
+6. **SRAM:** done in 0.2.0, see the update in section 3.
 7. **Tauri UI:** device list with connect state and battery, mapping editor with a "swap up/down" button, output mode switch, tray icon, autostart toggle.
 8. **Installer:** `cargo tauri build` produces `src-tauri\target\release\bundle\nsis\FreeShift_<ver>_x64-setup.exe`. Install, launch, test, uninstall.
 
@@ -226,7 +239,8 @@ Allow FreeShift through Windows Firewall on **private** networks, and keep the P
 - [ ] `-` press: MyWhoosh gear before → after
 - [ ] I key alone: gear goes up or down?  K key alone: up or down?
 - [ ] v2: still works after 3 min idle? left pod events received or locked (`FF` on SyncTX)?
-- [ ] SRAM: list of services/characteristics per component, and which (if any) notify on a press
+- [x] SRAM: which characteristic notifies on a press (`d9050054` on the rear derailleur)
+- [ ] SRAM in FreeShift: pairing, left and right presses, double click, reconnecting without pairing again
 
 ---
 
@@ -239,6 +253,7 @@ Allow FreeShift through Windows Firewall on **private** networks, and keep the P
 | BikeControl ≤ v4.6.2 (tag `gpl3`) | GPL-3.0 | Click v1 parsing, SRAM tap/double-tap idea. Copying code makes FreeShift GPL-3.0, which is fine if you publish source |
 | BikeControl current | Non-commercial, not open source | Read only. Don't copy code |
 | [openbikecontrol-protocol](https://github.com/OpenBikeControl/openbikecontrol-protocol) | MIT | Output protocol |
+| [sram-axs](https://github.com/GaborWnuk/sram-axs) | MPL-2.0 | SRAM pairing, key exchange and encryption. FreeShift uses the description and its worked example, no code |
 | [esphome-sram-axs](https://github.com/tarekrached/esphome-sram-axs) | see repo | SRAM advertisement layout |
 | [qdomyos-zwift PR #4743](https://github.com/cagnulein/qdomyos-zwift/pull/4743) | GPL-3.0 project | Click v2 keep-alive and lock detection notes |
 | [ajchellew/zwiftplay](https://github.com/ajchellew/zwiftplay) | not stated | Zwift Play (encrypted) background only |
@@ -253,7 +268,7 @@ Name and branding: don't use "Zwift", "SRAM", "MyWhoosh" or "BikeControl" in the
 1. Your Click model and whether v2 left-pod unlock is still enforced on current firmware.
 2. Whether your MyWhoosh build discovers `_openbikecontrol._tcp` (and its version).
 3. I vs K direction.
-4. Whether SRAM AXS exposes any unbonded notify characteristic on button press.
+4. SRAM AXS: how to turn real shifting off and on again (presses themselves are solved, see section 3).
 5. Whether btleplug on Windows needs the device unpaired (expected: yes, keep it unpaired) and how it behaves after sleep/resume.
 
 ## Sources
