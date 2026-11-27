@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::future::pending;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,12 +11,12 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral, PeripheralId};
 use futures::{Stream, StreamExt};
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
-use tokio::time::{Instant, interval, sleep, sleep_until, timeout};
+use tokio::time::{Instant, interval, sleep, timeout};
 use uuid::Uuid;
 
-use crate::config::{Config, CustomTrigger};
+use crate::config::Config;
 use crate::link::Link;
-use crate::model::{Action, Button, EngineEvent, hex};
+use crate::model::{Button, EngineEvent, hex};
 use crate::sram::{self, Handshake, KeySource, KeyStore, Side};
 use crate::zwift::{self, Frame, ZwiftKind};
 
@@ -45,32 +44,9 @@ pub enum RawInput {
     Pulse { device: String, button: Button },
 }
 
-#[derive(Clone, Copy, Debug)]
-struct SramDoubles {
-    left: bool,
-    right: bool,
-}
-
-impl SramDoubles {
-    fn from_config(config: &Config) -> SramDoubles {
-        SramDoubles {
-            left: config.action_for(Button::SramLeftDouble) != Action::None,
-            right: config.action_for(Button::SramRightDouble) != Action::None,
-        }
-    }
-
-    fn uses_double(self, side: Side) -> bool {
-        match side {
-            Side::Left => self.left,
-            Side::Right => self.right,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 enum Target {
     Zwift(ZwiftKind),
-    Custom(CustomTrigger),
     Sram,
 }
 
@@ -102,14 +78,6 @@ pub fn display_name(properties: &PeripheralProperties) -> String {
 }
 
 fn classify(properties: &PeripheralProperties, config: &Config) -> Option<Target> {
-    let name = display_name(properties).to_lowercase();
-    let custom = config.custom_triggers.iter().find(|trigger| {
-        let prefix = trigger.name_prefix.trim().to_lowercase();
-        !prefix.is_empty() && !trigger.characteristic.trim().is_empty() && name.starts_with(&prefix)
-    });
-    if let Some(trigger) = custom {
-        return Some(Target::Custom(trigger.clone()));
-    }
     if sram::is_rear_derailleur(properties) {
         return Some(Target::Sram);
     }
@@ -119,6 +87,7 @@ fn classify(properties: &PeripheralProperties, config: &Config) -> Option<Target
     if let Some(kind) = ZwiftKind::from_manufacturer_data(&properties.manufacturer_data) {
         return kind.is_supported().then_some(Target::Zwift(kind));
     }
+    let name = display_name(properties).to_lowercase();
     name.starts_with("zwift").then_some(Target::Zwift(ZwiftKind::Unknown(0)))
 }
 
@@ -180,7 +149,6 @@ impl Scanner {
         let events = self.events.clone();
         let stop = self.stop.clone();
         let done = self.done.clone();
-        let settings = self.settings.clone();
         let previous_failure = self.failing.get(&id).cloned();
         let access = Access {
             adapter: self.adapter.clone(),
@@ -191,10 +159,7 @@ impl Scanner {
             let label = if name.is_empty() { peripheral.address().to_string() } else { name.clone() };
             let result = match target {
                 Target::Zwift(kind) => zwift_session(&peripheral, kind, &label, &access, &raw, &events, stop).await,
-                Target::Custom(trigger) => {
-                    trigger_session(&peripheral, &trigger, &label, &settings, &access, &raw, &events, stop).await
-                }
-                Target::Sram => sram_session(&peripheral, &label, &settings, &access, &raw, &events, stop).await,
+                Target::Sram => sram_session(&peripheral, &label, &access, &raw, &events, stop).await,
             };
             let failure = result.err().map(|error| format!("{error:#}"));
             if let Some(text) = &failure {
@@ -548,133 +513,12 @@ async fn zwift_session(
     outcome
 }
 
-async fn trigger_session(
-    peripheral: &Peripheral,
-    trigger: &CustomTrigger,
-    label: &str,
-    settings: &watch::Receiver<Config>,
-    access: &Access,
-    raw: &mpsc::UnboundedSender<RawInput>,
-    events: &broadcast::Sender<EngineEvent>,
-    mut stop: watch::Receiver<bool>,
-) -> Result<()> {
-    let device = peripheral.address().to_string();
-    let uuid = Uuid::parse_str(trigger.characteristic.trim()).context("trigger characteristic is not a valid UUID")?;
-    let (_link, characteristic) = connect_for(peripheral, access, uuid).await?;
-    let characteristic = characteristic.with_context(|| format!("characteristic {uuid} not found"))?;
-    let mut notifications = peripheral.notifications().await.context("opening notification stream")?;
-    peripheral.subscribe(&characteristic).await.context("subscribing to trigger")?;
-    let _ = events.send(EngineEvent::DeviceConnected {
-        id: device.clone(),
-        name: label.to_string(),
-        kind: "Custom trigger (tap / double tap)".to_string(),
-    });
-
-    let mut health = interval(KEEPALIVE);
-    let mut taps = 0u32;
-    let mut deadline: Option<Instant> = None;
-
-    let outcome = loop {
-        let wait = async {
-            match deadline {
-                Some(at) => sleep_until(at).await,
-                None => pending::<()>().await,
-            }
-        };
-        tokio::select! {
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    break Ok(());
-                }
-            }
-            notification = notifications.next() => {
-                let Some(notification) = notification else {
-                    break Err(anyhow!("connection lost"));
-                };
-                if notification.uuid != uuid {
-                    continue;
-                }
-                let _ = events.send(EngineEvent::Notification {
-                    device: label.to_string(),
-                    characteristic: uuid.to_string(),
-                    hex: hex(&notification.value),
-                });
-                taps += 1;
-                if taps >= 2 {
-                    taps = 0;
-                    deadline = None;
-                    let _ = raw.send(RawInput::Pulse { device: device.clone(), button: Button::DoubleTap });
-                } else {
-                    deadline = Some(Instant::now() + settings.borrow().double_tap_window());
-                }
-            }
-            _ = wait => {
-                taps = 0;
-                deadline = None;
-                let _ = raw.send(RawInput::Pulse { device: device.clone(), button: Button::Tap });
-            }
-            _ = health.tick() => {
-                if !peripheral.is_connected().await.unwrap_or(false) {
-                    break Err(anyhow!("connection lost"));
-                }
-            }
-        }
-    };
-
-    let _ = events.send(EngineEvent::DeviceDisconnected { id: device, name: label.to_string() });
-    outcome
-}
-
 type Notifications = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
 
-#[derive(Default)]
-struct PaddleClicks {
-    pending: [Option<Instant>; 2],
-}
-
-fn side_index(side: Side) -> usize {
+fn paddle_button(side: Side) -> Button {
     match side {
-        Side::Left => 0,
-        Side::Right => 1,
-    }
-}
-
-fn paddle_button(side: Side, is_double: bool) -> Button {
-    match (side, is_double) {
-        (Side::Left, false) => Button::SramLeft,
-        (Side::Left, true) => Button::SramLeftDouble,
-        (Side::Right, false) => Button::SramRight,
-        (Side::Right, true) => Button::SramRightDouble,
-    }
-}
-
-impl PaddleClicks {
-    fn press(&mut self, side: Side, doubles: SramDoubles, now: Instant, window: Duration) -> Option<Button> {
-        if !doubles.uses_double(side) {
-            return Some(paddle_button(side, false));
-        }
-        let slot = &mut self.pending[side_index(side)];
-        if slot.take().is_some() {
-            return Some(paddle_button(side, true));
-        }
-        *slot = Some(now + window);
-        None
-    }
-
-    fn expired(&mut self, now: Instant) -> Vec<Button> {
-        let mut buttons = Vec::new();
-        for side in [Side::Left, Side::Right] {
-            let slot = &mut self.pending[side_index(side)];
-            if slot.is_some_and(|deadline| deadline <= now) {
-                *slot = None;
-                buttons.push(paddle_button(side, false));
-            }
-        }
-        buttons
-    }
-
-    fn next_deadline(&self) -> Option<Instant> {
-        self.pending.iter().flatten().min().copied()
+        Side::Left => Button::SramLeft,
+        Side::Right => Button::SramRight,
     }
 }
 
@@ -744,7 +588,6 @@ fn save_keys(store: &KeyStore, label: &str, events: &broadcast::Sender<EngineEve
 async fn sram_session(
     peripheral: &Peripheral,
     label: &str,
-    settings: &watch::Receiver<Config>,
     access: &Access,
     raw: &mpsc::UnboundedSender<RawInput>,
     events: &broadcast::Sender<EngineEvent>,
@@ -784,15 +627,8 @@ async fn sram_session(
     let mut health = interval(KEEPALIVE);
     let mut pairing = interval(PAIR_RETRY);
     let mut is_bond_subscribed = false;
-    let mut clicks = PaddleClicks::default();
 
     let outcome = loop {
-        let wait = async {
-            match clicks.next_deadline() {
-                Some(at) => sleep_until(at).await,
-                None => pending::<()>().await,
-            }
-        };
         tokio::select! {
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
@@ -819,13 +655,7 @@ async fn sram_session(
                 match sram::open(&current, &frame) {
                     Ok(plain) => match sram::decode_press(&plain).and_then(|press| press.side()) {
                         Some(side) => {
-                            let (doubles, window) = {
-                                let config = settings.borrow();
-                                (SramDoubles::from_config(&config), config.double_tap_window())
-                            };
-                            if let Some(button) = clicks.press(side, doubles, Instant::now(), window) {
-                                let _ = raw.send(RawInput::Pulse { device: device.clone(), button });
-                            }
+                            let _ = raw.send(RawInput::Pulse { device: device.clone(), button: paddle_button(side) });
                         }
                         None => log(format!("{label}: press from an unknown control ({})", hex(&plain))),
                     },
@@ -835,11 +665,6 @@ async fn sram_session(
                         key = None;
                         log(format!("{label}: the saved key no longer matches; another app paired with it. Hold the AXS button on the rear derailleur until its light flashes to pair again."));
                     }
-                }
-            }
-            _ = wait => {
-                for button in clicks.expired(Instant::now()) {
-                    let _ = raw.send(RawInput::Pulse { device: device.clone(), button });
                 }
             }
             _ = pairing.tick(), if key.is_none() => {
@@ -879,54 +704,6 @@ async fn sram_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn single_clicks_fire_at_once_without_a_double_action() {
-        let mut clicks = PaddleClicks::default();
-        let doubles = SramDoubles { left: false, right: false };
-        let now = Instant::now();
-        assert_eq!(clicks.press(Side::Left, doubles, now, Duration::from_millis(350)), Some(Button::SramLeft));
-        assert_eq!(clicks.press(Side::Right, doubles, now, Duration::from_millis(350)), Some(Button::SramRight));
-        assert_eq!(clicks.next_deadline(), None);
-    }
-
-    #[test]
-    fn two_clicks_inside_the_window_make_a_double() {
-        let mut clicks = PaddleClicks::default();
-        let doubles = SramDoubles { left: true, right: false };
-        let now = Instant::now();
-        let window = Duration::from_millis(350);
-        assert_eq!(clicks.press(Side::Left, doubles, now, window), None);
-        assert_eq!(clicks.press(Side::Left, doubles, now + Duration::from_millis(200), window), Some(Button::SramLeftDouble));
-        assert!(clicks.expired(now + Duration::from_secs(1)).is_empty());
-    }
-
-    #[test]
-    fn a_lone_click_fires_when_the_window_ends() {
-        let mut clicks = PaddleClicks::default();
-        let doubles = SramDoubles { left: true, right: true };
-        let now = Instant::now();
-        let window = Duration::from_millis(350);
-        assert_eq!(clicks.press(Side::Right, doubles, now, window), None);
-        assert!(clicks.expired(now + Duration::from_millis(100)).is_empty());
-        assert_eq!(clicks.next_deadline(), Some(now + window));
-        assert_eq!(clicks.expired(now + window), vec![Button::SramRight]);
-        assert_eq!(clicks.next_deadline(), None);
-    }
-
-    #[test]
-    fn a_click_still_fires_when_its_double_action_is_removed() {
-        let mut clicks = PaddleClicks::default();
-        let now = Instant::now();
-        let window = Duration::from_millis(350);
-        assert_eq!(clicks.press(Side::Left, SramDoubles { left: true, right: false }, now, window), None);
-        let without_double = SramDoubles { left: false, right: false };
-        assert_eq!(
-            clicks.press(Side::Left, without_double, now + Duration::from_millis(100), window),
-            Some(Button::SramLeft)
-        );
-        assert_eq!(clicks.expired(now + window), vec![Button::SramLeft]);
-    }
 
     #[test]
     fn recognises_connect_errors() {

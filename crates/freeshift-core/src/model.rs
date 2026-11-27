@@ -12,16 +12,12 @@ pub enum Button {
     B,
     Y,
     Z,
-    Tap,
-    DoubleTap,
     SramLeft,
-    SramLeftDouble,
     SramRight,
-    SramRightDouble,
 }
 
 impl Button {
-    pub const ALL: [Button; 16] = [
+    pub const ALL: [Button; 12] = [
         Button::Plus,
         Button::Minus,
         Button::Left,
@@ -32,12 +28,8 @@ impl Button {
         Button::B,
         Button::Y,
         Button::Z,
-        Button::Tap,
-        Button::DoubleTap,
         Button::SramLeft,
-        Button::SramLeftDouble,
         Button::SramRight,
-        Button::SramRightDouble,
     ];
 
     pub fn label(self) -> &'static str {
@@ -52,13 +44,13 @@ impl Button {
             Button::B => "B",
             Button::Y => "Y",
             Button::Z => "Z",
-            Button::Tap => "Tap",
-            Button::DoubleTap => "DoubleTap",
             Button::SramLeft => "SramLeft",
-            Button::SramLeftDouble => "SramLeftDouble",
             Button::SramRight => "SramRight",
-            Button::SramRightDouble => "SramRightDouble",
         }
+    }
+
+    pub fn from_label(label: &str) -> Option<Button> {
+        Button::ALL.into_iter().find(|button| button.label() == label)
     }
 }
 

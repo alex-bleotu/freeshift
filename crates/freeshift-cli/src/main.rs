@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use freeshift_core::config::{Config, CustomTrigger, OutputMode};
+use freeshift_core::config::{Config, OutputMode};
 use freeshift_core::engine::{self, spawn_output};
 use freeshift_core::explore;
 use freeshift_core::keyboard;
@@ -25,8 +25,6 @@ USAGE:
   freeshift-cli swap                         swap shift up and shift down for every button
   freeshift-cli output <obc|keys>            choose OpenBikeControl (network) or keyboard output
   freeshift-cli keys <up-key> <down-key>     set keyboard keys, e.g. freeshift-cli keys I K
-  freeshift-cli trigger <name> <uuid>        add a custom tap/double-tap trigger (e.g. SRAM)
-  freeshift-cli trigger-clear                remove all custom triggers
 ";
 
 #[tokio::main]
@@ -75,18 +73,6 @@ async fn run(arguments: Vec<String>) -> Result<()> {
                 config.keys.insert(Action::ShiftDown, down.to_string());
             })
         }
-        "trigger" => {
-            let (Some(name), Some(uuid)) = (argument(1), argument(2)) else {
-                bail!("use: freeshift-cli trigger <device-name-prefix> <characteristic-uuid>");
-            };
-            update_config(|config| {
-                config.custom_triggers.push(CustomTrigger {
-                    name_prefix: name.to_string(),
-                    characteristic: uuid.to_string(),
-                });
-            })
-        }
-        "trigger-clear" => update_config(|config| config.custom_triggers.clear()),
         "help" | "-h" | "--help" => {
             print!("{HELP}");
             Ok(())

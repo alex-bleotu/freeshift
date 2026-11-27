@@ -1,14 +1,13 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::{Action, Button};
 
-const SRAM_BUTTONS: [Button; 4] = [Button::SramLeft, Button::SramLeftDouble, Button::SramRight, Button::SramRightDouble];
+const SRAM_BUTTONS: [Button; 2] = [Button::SramLeft, Button::SramRight];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutputMode {
@@ -17,17 +16,11 @@ pub enum OutputMode {
     Keyboard,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct CustomTrigger {
-    pub name_prefix: String,
-    pub characteristic: String,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Config {
     pub output: OutputMode,
+    #[serde(deserialize_with = "known_buttons")]
     pub mapping: BTreeMap<Button, Action>,
     pub controller_name: String,
     pub obc_port: u16,
@@ -35,8 +28,14 @@ pub struct Config {
     pub key_hold_ms: u64,
     pub focus_window_prefix: String,
     pub zwift_enabled: bool,
-    pub custom_triggers: Vec<CustomTrigger>,
-    pub double_tap_ms: u64,
+}
+
+fn known_buttons<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<Button, Action>, D::Error> {
+    let mapping = BTreeMap::<String, Action>::deserialize(deserializer)?;
+    Ok(mapping
+        .into_iter()
+        .filter_map(|(label, action)| Button::from_label(&label).map(|button| (button, action)))
+        .collect())
 }
 
 impl Default for Config {
@@ -52,8 +51,6 @@ impl Default for Config {
             (Button::B, Action::ShiftDown),
             (Button::Y, Action::Menu),
             (Button::Z, Action::Back),
-            (Button::Tap, Action::ShiftUp),
-            (Button::DoubleTap, Action::ShiftDown),
             (Button::SramLeft, Action::ShiftDown),
             (Button::SramRight, Action::ShiftUp),
         ]);
@@ -66,8 +63,6 @@ impl Default for Config {
             key_hold_ms: 40,
             focus_window_prefix: "MyWhoosh".to_string(),
             zwift_enabled: true,
-            custom_triggers: Vec::new(),
-            double_tap_ms: 350,
         }
     }
 }
@@ -146,17 +141,12 @@ impl Config {
         self.mapping.get(&button).copied().unwrap_or_default()
     }
 
-    pub fn double_tap_window(&self) -> Duration {
-        Duration::from_millis(self.double_tap_ms)
-    }
-
     pub fn can_apply_live(&self, next: &Config) -> bool {
         let live = Config {
             mapping: next.mapping.clone(),
             keys: next.keys.clone(),
             key_hold_ms: next.key_hold_ms,
             focus_window_prefix: next.focus_window_prefix.clone(),
-            double_tap_ms: next.double_tap_ms,
             ..self.clone()
         };
         live == *next
@@ -189,16 +179,22 @@ mod tests {
         config.add_missing_sram_mapping();
         assert_eq!(config.action_for(Button::SramLeft), Action::ShiftDown);
         assert_eq!(config.action_for(Button::SramRight), Action::ShiftUp);
-        assert_eq!(config.action_for(Button::SramLeftDouble), Action::None);
         assert_eq!(config.action_for(Button::Minus), Action::None);
     }
 
     #[test]
     fn cleared_sram_paddles_stay_cleared() {
-        let mut config: Config = serde_json::from_str(r#"{"mapping":{"SramLeftDouble":"Pause"}}"#).unwrap();
+        let mut config: Config = serde_json::from_str(r#"{"mapping":{"SramRight":"Pause"}}"#).unwrap();
         config.add_missing_sram_mapping();
         assert_eq!(config.action_for(Button::SramLeft), Action::None);
-        assert_eq!(config.action_for(Button::SramLeftDouble), Action::Pause);
+        assert_eq!(config.action_for(Button::SramRight), Action::Pause);
+    }
+
+    #[test]
+    fn older_configs_drop_removed_buttons_and_settings() {
+        let text = r#"{"mapping":{"Plus":"ShiftUp","Tap":"ShiftUp","SramLeftDouble":"Pause"},"customTriggers":[{"namePrefix":"X","characteristic":"y"}],"doubleTapMs":350}"#;
+        let config: Config = serde_json::from_str(text).unwrap();
+        assert_eq!(config.mapping, BTreeMap::from([(Button::Plus, Action::ShiftUp)]));
     }
 
     #[test]
@@ -206,24 +202,21 @@ mod tests {
         let current = Config::default();
         let mut next = current.clone();
         next.mapping.insert(Button::Plus, Action::Pause);
-        next.mapping.insert(Button::SramLeftDouble, Action::Pause);
+        next.mapping.insert(Button::SramLeft, Action::Pause);
         next.keys.insert(Action::ShiftUp, "P".to_string());
         next.key_hold_ms = 90;
         next.focus_window_prefix = "Zwift".to_string();
-        next.double_tap_ms = 500;
         assert!(current.can_apply_live(&next));
     }
 
     #[test]
     fn connection_changes_need_a_restart() {
         let current = Config::default();
-        let trigger = CustomTrigger { name_prefix: "SRAM".to_string(), characteristic: "x".to_string() };
         let changed = [
             Config { output: OutputMode::Keyboard, ..current.clone() },
             Config { controller_name: "Other".to_string(), ..current.clone() },
             Config { obc_port: 21588, ..current.clone() },
             Config { zwift_enabled: false, ..current.clone() },
-            Config { custom_triggers: vec![trigger], ..current.clone() },
         ];
         for next in changed {
             assert!(!current.can_apply_live(&next));

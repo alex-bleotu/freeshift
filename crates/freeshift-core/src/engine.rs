@@ -227,7 +227,7 @@ mod tests {
         let (_settings, settings_receiver) = settings_with(&[
             (Button::Plus, Action::ShiftUp),
             (Button::Minus, Action::ShiftDown),
-            (Button::DoubleTap, Action::ShiftDown),
+            (Button::SramLeft, Action::ShiftDown),
         ]);
         let task = tokio::spawn(dispatch(settings_receiver, raw_receiver, actions, events));
 
@@ -236,7 +236,7 @@ mod tests {
         raw.send(RawInput::State { device: "left".into(), pressed: vec![] }).unwrap();
         raw.send(RawInput::State { device: "right".into(), pressed: vec![Button::Minus] }).unwrap();
         raw.send(RawInput::Gone { device: "right".into() }).unwrap();
-        raw.send(RawInput::Pulse { device: "sram".into(), button: Button::DoubleTap }).unwrap();
+        raw.send(RawInput::Pulse { device: "sram".into(), button: Button::SramLeft }).unwrap();
         raw.send(RawInput::State { device: "left".into(), pressed: vec![Button::A] }).unwrap();
         drop(raw);
         task.await.unwrap();

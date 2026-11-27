@@ -24,6 +24,15 @@
     </header>
 
     <main class="page">
+      <section class="connected" aria-labelledby="devices-title">
+        <div class="title-row">
+          <h2 id="devices-title" class="connected-title">Connected</h2>
+          <button type="button" class="info-button" popovertarget="info-devices" aria-label="About connecting">i</button>
+        </div>
+        <ul id="devices" class="device-chips"></ul>
+        <p id="devices-empty" class="muted small flush">No controller yet. Press a button on your Click.</p>
+      </section>
+
       <section class="card controller-card" aria-labelledby="controller-title">
         <div class="card-head">
           <div>
@@ -37,64 +46,6 @@
         </div>
         <div id="pods" class="pods"></div>
       </section>
-
-      <div class="grid">
-        <section class="card" aria-labelledby="devices-title">
-          <div class="title-row">
-            <h2 id="devices-title">Connected</h2>
-            <button type="button" class="info-button" popovertarget="info-devices" aria-label="About connecting">i</button>
-          </div>
-          <ul id="devices" class="device-list"></ul>
-          <p id="devices-empty" class="muted flush">No controller yet. Press a button on your Click.</p>
-          <ul id="apps" class="device-list app-list"></ul>
-        </section>
-
-        <section class="card" aria-labelledby="output-title">
-          <div class="title-row">
-            <h2 id="output-title">Output to MyWhoosh</h2>
-            <button type="button" class="info-button" popovertarget="info-output" aria-label="About the output to MyWhoosh">i</button>
-          </div>
-          <fieldset class="segmented">
-            <legend class="visually-hidden">Output mode</legend>
-            <label><input type="radio" name="output" value="OpenBikeControl" /> <span>Network (recommended)</span></label>
-            <label><input type="radio" name="output" value="Keyboard" /> <span>Keyboard keys</span></label>
-          </fieldset>
-          <div id="obc-fields" class="fields">
-            <p class="muted">In MyWhoosh: Connection → OpenBikeControl icon → "<span id="obc-name-hint">FreeShift</span>".</p>
-            <label>Controller name <input id="controller-name" type="text" maxlength="40" /></label>
-            <label>TCP port <input id="obc-port" type="number" min="1024" max="65535" /></label>
-          </div>
-          <div id="keyboard-fields" class="fields">
-            <p class="muted">Presses these keys in the MyWhoosh window.</p>
-            <table class="keys">
-              <thead>
-                <tr><th scope="col">Action</th><th scope="col">Key</th></tr>
-              </thead>
-              <tbody id="keys"></tbody>
-            </table>
-            <div class="row">
-              <label>Window title starts with <input id="focus-window" type="text" maxlength="60" /></label>
-              <label>Key hold (ms) <input id="key-hold" type="number" min="10" max="500" /></label>
-            </div>
-          </div>
-        </section>
-
-        <section class="card" aria-labelledby="triggers-title">
-          <div class="title-row">
-            <h2 id="triggers-title">Other Bluetooth buttons</h2>
-            <button type="button" class="info-button" popovertarget="info-triggers" aria-label="About other Bluetooth buttons">i</button>
-          </div>
-          <p class="muted">Tap and double tap from any Bluetooth button.</p>
-          <ul id="triggers" class="trigger-list"></ul>
-          <form id="trigger-form" class="row trigger-form">
-            <label>Name starts with <input id="trigger-name" type="text" placeholder="SRAM" required /></label>
-            <label>Characteristic UUID <input id="trigger-uuid" type="text" placeholder="0000xxxx-0000-1000-8000-00805f9b34fb" required pattern="[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" /></label>
-            <button type="submit" class="secondary">Add</button>
-          </form>
-          <label class="inline">Double tap window (ms) <input id="double-tap" type="number" min="150" max="800" /></label>
-        </section>
-
-      </div>
 
       <section class="card log-card" aria-labelledby="log-title">
         <h2 id="log-title">Activity</h2>
@@ -111,18 +62,6 @@
       <p>FreeShift connects to a Zwift Click by itself. Don't pair it in Windows Bluetooth settings.</p>
       <p>A Click talks to one app at a time, so close BikeControl, Zwift or Zwift Companion while using FreeShift.</p>
       <p>The left pod of a Click v2 only works while Zwift has unlocked it in the last day; the right pod always works.</p>
-    </div>
-
-    <div id="info-output" class="info-pop" popover>
-      <p><strong>Network:</strong> MyWhoosh finds FreeShift on your local network as an OpenBikeControl controller. In MyWhoosh open Connection, tap the OpenBikeControl icon (top right), pick FreeShift and confirm.</p>
-      <p>On Windows, MyWhoosh needs Apple's Bonjour service; restart MyWhoosh if it was open before Bonjour started. If Windows asks about network access, allow private networks.</p>
-      <p><strong>Keyboard:</strong> FreeShift brings the window whose title starts with the text you set to the front and presses the key. MyWhoosh shifts with I and K. Keys: a letter or digit, Up, Down, Left, Right, Enter, Escape, Space, Tab, PageUp, PageDown, Home, End or F1 to F12. Leave a key empty to send nothing.</p>
-    </div>
-
-    <div id="info-triggers" class="info-pop" popover>
-      <p>For a Bluetooth device that only reports that something was pressed. One press is Tap, two quick presses are Double tap; set their actions on the controller above.</p>
-      <p>Find the device's characteristic with <code>freeshift-cli explore &lt;name&gt;</code>.</p>
-      <p>SRAM AXS needs more than this; see the README.</p>
     </div>
 
     <dialog id="editor" class="editor-dialog" aria-labelledby="editor-title" aria-describedby="editor-current">
@@ -148,9 +87,50 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
-        <label class="switch"><input id="autostart" type="checkbox" /> <span>Start with Windows (in the tray)</span></label>
-        <label class="switch"><input id="zwift-enabled" type="checkbox" /> <span>Connect Zwift controllers</span></label>
-        <p class="muted small flush">Settings file: <code id="config-path"></code></p>
+        <section class="settings-section" aria-labelledby="output-title">
+          <div class="title-row">
+            <h4 id="output-title" class="section-title">Output to MyWhoosh</h4>
+            <button type="button" class="info-button" popovertarget="info-output" aria-label="About the output to MyWhoosh">i</button>
+          </div>
+          <fieldset class="segmented">
+            <legend class="visually-hidden">Output mode</legend>
+            <label><input type="radio" name="output" value="OpenBikeControl" /> <span>Network (recommended)</span></label>
+            <label><input type="radio" name="output" value="Keyboard" /> <span>Keyboard keys</span></label>
+          </fieldset>
+          <div id="obc-fields" class="fields">
+            <p class="muted">In MyWhoosh: Connection → OpenBikeControl icon → "<span id="obc-name-hint">FreeShift</span>".</p>
+            <div class="row">
+              <label>Controller name <input id="controller-name" type="text" maxlength="40" /></label>
+              <label>TCP port <input id="obc-port" type="number" min="1024" max="65535" /></label>
+            </div>
+          </div>
+          <div id="keyboard-fields" class="fields">
+            <p class="muted">Presses these keys in the MyWhoosh window.</p>
+            <table class="keys">
+              <thead>
+                <tr><th scope="col">Action</th><th scope="col">Key</th></tr>
+              </thead>
+              <tbody id="keys"></tbody>
+            </table>
+            <div class="row">
+              <label>Window title starts with <input id="focus-window" type="text" maxlength="60" /></label>
+              <label>Key hold (ms) <input id="key-hold" type="number" min="10" max="500" /></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" aria-labelledby="general-title">
+          <h4 id="general-title" class="section-title">General</h4>
+          <label class="switch"><input id="autostart" type="checkbox" /> <span>Start with Windows (in the tray)</span></label>
+          <label class="switch"><input id="zwift-enabled" type="checkbox" /> <span>Connect Zwift controllers</span></label>
+          <p class="muted small flush">Settings file: <code id="config-path"></code></p>
+        </section>
+      </div>
+
+      <div id="info-output" class="info-pop" popover>
+        <p><strong>Network:</strong> MyWhoosh finds FreeShift on your local network as an OpenBikeControl controller. In MyWhoosh open Connection, tap the OpenBikeControl icon (top right), pick FreeShift and confirm.</p>
+        <p>On Windows, MyWhoosh needs Apple's Bonjour service; restart MyWhoosh if it was open before Bonjour started. If Windows asks about network access, allow private networks.</p>
+        <p><strong>Keyboard:</strong> FreeShift brings the window whose title starts with the text you set to the front and presses the key. MyWhoosh shifts with I and K. Keys: a letter or digit, Up, Down, Left, Right, Enter, Escape, Space, Tab, PageUp, PageDown, Home, End or F1 to F12. Leave a key empty to send nothing.</p>
       </div>
     </dialog>
 

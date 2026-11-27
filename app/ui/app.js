@@ -31,20 +31,8 @@ const PODS = [
     shape: "sram",
     showWhen: (device) => device.kind.startsWith("SRAM"),
     buttons: [
-      { button: "SramLeft", glyph: "1×", name: "Left click", kind: "paddle", x: 33, y: 55 },
-      { button: "SramLeftDouble", glyph: "2×", name: "Left double click", kind: "paddle", x: 33, y: 73 },
-      { button: "SramRight", glyph: "1×", name: "Right click", kind: "paddle", x: 67, y: 55 },
-      { button: "SramRightDouble", glyph: "2×", name: "Right double click", kind: "paddle", x: 67, y: 73 },
-    ],
-  },
-  {
-    id: "extra",
-    title: "Custom trigger",
-    compact: true,
-    showWhen: (device) => device.kind.startsWith("Custom trigger"),
-    buttons: [
-      { button: "Tap", glyph: "1×", name: "Tap", x: 30, y: 50 },
-      { button: "DoubleTap", glyph: "2×", name: "Double tap", x: 70, y: 50 },
+      { button: "SramLeft", glyph: "L", name: "Left paddle", kind: "paddle", x: 33, y: 65 },
+      { button: "SramRight", glyph: "R", name: "Right paddle", kind: "paddle", x: 67, y: 65 },
     ],
   },
 ];
@@ -59,7 +47,7 @@ const ACTION_GROUPS = [
 
 const LOG_LIMIT = 300;
 
-const LIVE_SETTING = ["doubleTapMs", "focusWindowPrefix", "keyHoldMs", "keys", "mapping"];
+const LIVE_SETTING = ["focusWindowPrefix", "keyHoldMs", "keys", "mapping"];
 
 const OUTPUT_FAILURE = /^(OpenBikeControl|Keyboard) output stopped/;
 
@@ -171,42 +159,42 @@ function renderStatus() {
   pill.textContent = "Starting";
 }
 
+function createDeviceChip(title, detail) {
+  const item = document.createElement("li");
+  item.className = "device-chip";
+  const dot = document.createElement("span");
+  dot.className = "device-dot";
+  dot.setAttribute("aria-hidden", "true");
+  const name = document.createElement("span");
+  name.className = "device-name";
+  name.textContent = title;
+  const kind = document.createElement("span");
+  kind.className = "device-kind";
+  kind.textContent = detail;
+  item.append(dot, name, kind);
+
+  return item;
+}
+
+function deviceDetail(device) {
+  const hasBattery = device.battery !== null && device.battery !== undefined;
+
+  return hasBattery ? `${device.kind} · ${device.battery}%` : device.kind;
+}
+
 function renderDevices() {
   const list = element("devices");
   list.replaceChildren();
   for (const device of state.devices.values()) {
-    const item = document.createElement("li");
-    const text = document.createElement("div");
-    const name = document.createElement("div");
-    name.className = "device-name";
-    name.textContent = device.name;
-    const kind = document.createElement("div");
-    kind.className = "device-kind";
-    kind.textContent = device.kind;
-    text.append(name, kind);
-    const battery = document.createElement("span");
-    battery.className = "battery";
-    battery.textContent = device.battery === null || device.battery === undefined ? "" : `${device.battery}% battery`;
-    item.append(text, battery);
-    list.append(item);
+    list.append(createDeviceChip(device.name, deviceDetail(device)));
   }
-  element("devices-empty").hidden = state.devices.size > 0;
-  renderPods();
-  const apps = element("apps");
-  apps.replaceChildren();
   for (const app of state.trainerApps.values()) {
-    const item = document.createElement("li");
-    const text = document.createElement("div");
-    const name = document.createElement("div");
-    name.className = "device-name";
-    name.textContent = `${app.app} ${app.version}`.trim();
-    const detail = document.createElement("div");
-    detail.className = "device-kind";
-    detail.textContent = `Trainer app at ${app.peer}, accepts ${app.supported.length} actions`;
-    text.append(name, detail);
-    item.append(text);
-    apps.append(item);
+    const chip = createDeviceChip(`${app.app} ${app.version}`.trim(), `Trainer app at ${app.peer}, accepts ${app.supported.length} actions`);
+    chip.classList.add("app");
+    list.append(chip);
   }
+  element("devices-empty").hidden = state.devices.size > 0 || state.trainerApps.size > 0;
+  renderPods();
 }
 
 function createChevron(turn) {
@@ -314,16 +302,14 @@ function renderPods() {
   }
   for (const pod of PODS.filter(isPodShown)) {
     const wrap = document.createElement("section");
-    wrap.className = pod.compact ? "pod-wrap compact" : "pod-wrap";
+    wrap.className = "pod-wrap";
     wrap.setAttribute("aria-label", pod.title);
     const title = document.createElement("h3");
     title.className = "pod-title";
     title.textContent = pod.title;
     const shape = document.createElement("div");
-    shape.className = pod.compact ? "pod pod-compact" : `pod pod-${pod.id}`;
-    if (!pod.compact) {
-      shape.append(...createShell(pod.shape || "click"));
-    }
+    shape.className = `pod pod-${pod.id}`;
+    shape.append(...createShell(pod.shape || "click"));
     for (const entry of pod.buttons) {
       shape.append(createPadButton(entry));
     }
@@ -459,28 +445,6 @@ function renderKeys() {
   }
 }
 
-function renderTriggers() {
-  const list = element("triggers");
-  list.replaceChildren();
-  state.draft.customTriggers.forEach((trigger, index) => {
-    const item = document.createElement("li");
-    const text = document.createElement("code");
-    text.textContent = `${trigger.namePrefix}  ${trigger.characteristic}`;
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "link";
-    remove.textContent = "Remove";
-    remove.setAttribute("aria-label", `Remove trigger ${trigger.namePrefix}`);
-    remove.addEventListener("click", () => {
-      state.draft.customTriggers.splice(index, 1);
-      renderTriggers();
-      updateSaveBar();
-    });
-    item.append(text, remove);
-    list.append(item);
-  });
-}
-
 function renderOutputFields() {
   const isKeyboard = state.draft.output === "Keyboard";
   element("keyboard-fields").hidden = !isKeyboard;
@@ -497,13 +461,11 @@ function renderForm() {
   element("obc-port").value = config.obcPort;
   element("focus-window").value = config.focusWindowPrefix;
   element("key-hold").value = config.keyHoldMs;
-  element("double-tap").value = config.doubleTapMs;
   element("zwift-enabled").checked = config.zwiftEnabled;
   renderOutputFields();
   renderPods();
   renderEditor();
   renderKeys();
-  renderTriggers();
   updateSaveBar();
 }
 
@@ -707,21 +669,6 @@ async function toggleAutostart(event) {
   }
 }
 
-function addTrigger(event) {
-  event.preventDefault();
-  const form = event.target;
-  if (!form.reportValidity()) {
-    return;
-  }
-  state.draft.customTriggers.push({
-    namePrefix: element("trigger-name").value.trim(),
-    characteristic: element("trigger-uuid").value.trim().toLowerCase(),
-  });
-  form.reset();
-  renderTriggers();
-  updateSaveBar();
-}
-
 function revert() {
   state.draft = clone(state.saved);
   for (const input of document.querySelectorAll("input")) {
@@ -743,13 +690,11 @@ function wireUp() {
   bindField("obc-port", "obcPort", parseInteger(1024, 65535));
   bindField("focus-window", "focusWindowPrefix", (text) => text);
   bindField("key-hold", "keyHoldMs", parseInteger(10, 500));
-  bindField("double-tap", "doubleTapMs", parseInteger(150, 800));
   element("zwift-enabled").addEventListener("change", (event) => {
     state.draft.zwiftEnabled = event.target.checked;
     updateSaveBar();
   });
   element("autostart").addEventListener("change", toggleAutostart);
-  element("trigger-form").addEventListener("submit", addTrigger);
   element("save").addEventListener("click", save);
   element("revert").addEventListener("click", revert);
   element("swap").addEventListener("click", swap);
@@ -790,10 +735,16 @@ function placeInfo(popover) {
 function wireInfo() {
   const popovers = document.querySelectorAll(".info-pop");
   for (const popover of popovers) {
+    popover.addEventListener("beforetoggle", (event) => {
+      if (event.newState === "open") {
+        popover.classList.add("is-placing");
+      }
+    });
     popover.addEventListener("toggle", (event) => {
       if (event.newState === "open") {
         placeInfo(popover);
       }
+      popover.classList.remove("is-placing");
     });
   }
   globalThis.addEventListener(

@@ -192,7 +192,7 @@ async fn apply(app: &AppHandle, shared: &Shared, config: Config) {
     let is_applied = shared.engine.lock().await.as_ref().is_some_and(|handle| handle.apply(&config));
     if is_applied {
         let _ = shared.events.send(EngineEvent::Log {
-            message: "Settings applied; the controllers stay connected".to_string(),
+            message: "Settings applied".to_string(),
         });
         return;
     }

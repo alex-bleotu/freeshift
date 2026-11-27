@@ -11,6 +11,6 @@ pub mod protobuf;
 pub mod tracker;
 pub mod zwift;
 
-pub use config::{Config, CustomTrigger, OutputMode};
+pub use config::{Config, OutputMode};
 pub use engine::{EngineHandle, start};
 pub use model::{Action, Button, EngineEvent};
